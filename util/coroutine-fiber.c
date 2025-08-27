@@ -34,7 +34,7 @@ typedef struct {
     size_t asyncify_stack_size;
 
     CoroutineAction action;
-    
+
     emscripten_fiber_t fiber;
 } CoroutineEmscripten;
 
@@ -48,10 +48,18 @@ size_t leader_asyncify_stack_size = COROUTINE_STACK_SIZE;
 static void coroutine_trampoline(void *co_)
 {
     Coroutine *co = co_;
+    Coroutine *cocaller = co->caller;
 
     while (true) {
+        //printf("[%p] cor tramp befentry cocaller:%p cocallernow:%p co:%p coentry:%d cearg:%p\n", pthread_self(), cocaller,co->caller,co,co->entry,co->entry_arg);
+
         co->entry(co->entry_arg);
+
+        //printf("[%p] cor tramp aftentry cocaller:%p cocallernow:%p co:%p coentry:%d cearg:%p\n", pthread_self(), cocaller,co->caller,co,co->entry,co->entry_arg);
+
         qemu_coroutine_switch(co, co->caller, COROUTINE_TERMINATE);
+        //printf("chaft coroutine switch.. %p %d %d %p\n", pthread_self(), cocaller,co->caller,&co->caller);
+
     }
 }
 
@@ -68,7 +76,7 @@ Coroutine *qemu_coroutine_new(void)
     co->asyncify_stack = g_malloc0(co->asyncify_stack_size);
     emscripten_fiber_init(&co->fiber, coroutine_trampoline, &co->base,
                           co->stack, co->stack_size, co->asyncify_stack, co->asyncify_stack_size);
-    
+
     return &co->base;
 }
 
@@ -89,10 +97,9 @@ CoroutineAction qemu_coroutine_switch(Coroutine *from_, Coroutine *to_,
     CoroutineEmscripten *from = DO_UPCAST(CoroutineEmscripten, base, from_);
     CoroutineEmscripten *to = DO_UPCAST(CoroutineEmscripten, base, to_);
 
-#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
-    set_unwinding_flag();
-#endif
-    
+    //printf("[%p] cor switch from caller:%p cor:%p fromentry:%d fromentryarg:%p\n", pthread_self(), from_->caller, from_, from_->entry,from_->entry_arg);
+    //printf("[%p] cor switch to caller:%p cor:%p toentry:%d toentryarg:%p\n", pthread_self(), to_->caller, to_, to_->entry, to_->entry_arg);
+
     set_current(to_);
     to->action = action;
     emscripten_fiber_swap(&from->fiber, &to->fiber);

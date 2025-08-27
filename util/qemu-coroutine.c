@@ -85,9 +85,12 @@ Coroutine *qemu_coroutine_create(CoroutineEntry *entry, void *opaque)
         }
     }
 
+
     if (!co) {
         co = qemu_coroutine_new();
-    }
+    }/* else {
+        printf("[%p] coroutine reused: co:%p cocaller:%p preventry:%d\n", pthread_self(), co, co->caller, co->entry);
+    }*/
 
     co->entry = entry;
     co->entry_arg = opaque;
@@ -100,12 +103,14 @@ static void coroutine_delete(Coroutine *co)
     co->caller = NULL;
 
     if (IS_ENABLED(CONFIG_COROUTINE_POOL)) {
-        if (release_pool_size < qatomic_read(&pool_max_size) * 2) {
+        /*if (release_pool_size < qatomic_read(&pool_max_size) * 2) {
+            printf("[%p] delete: adding to release pool: co:%p cocaller:%p preventry:%d\n", pthread_self(), co, co->caller, co->entry);
             QSLIST_INSERT_HEAD_ATOMIC(&release_pool, co, pool_next);
             qatomic_inc(&release_pool_size);
             return;
-        }
+        }*/
         if (get_alloc_pool_size() < qatomic_read(&pool_max_size)) {
+            //printf("[%p] delete: adding to alloc pool: co:%p cocaller:%p preventry:%d\n", pthread_self(), co, co->caller, co->entry);
             QSLIST_INSERT_HEAD(get_ptr_alloc_pool(), co, pool_next);
             set_alloc_pool_size(get_alloc_pool_size() + 1);
             return;
@@ -162,6 +167,7 @@ void qemu_aio_coroutine_enter(AioContext *ctx, Coroutine *co)
          */
         smp_wmb();
 
+        //printf("[%p]: switch reason: aio_coroutine_enter\n", pthread_self());
         ret = qemu_coroutine_switch(from, to, COROUTINE_ENTER);
 
         /* Queued coroutines are run depth-first; previously pending coroutines
@@ -207,6 +213,7 @@ void coroutine_fn qemu_coroutine_yield(void)
         abort();
     }
 
+    //printf("[%p]: switch reason: yield\n", pthread_self());
     self->caller = NULL;
     qemu_coroutine_switch(self, to, COROUTINE_YIELD);
 }

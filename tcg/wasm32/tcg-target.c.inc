@@ -270,6 +270,7 @@ static const uint8_t tcg_target_reg_index[TCG_TARGET_NB_REGS] = {
 
 #define BLOCK_PTR_IDX 16
 
+// ok, this matches - a func defined in the module
 #define CTX_IDX 0
 #define TMP32_LOCAL_ENV_IDX 1
 #define TMP32_LOCAL_0_IDX 2
@@ -528,7 +529,7 @@ static void tcg_wasm_out_op_i64_store8(TCGContext *s, uint32_t a, uint32_t o)
 {
     tcg_wasm_out_op_loadstore(s, 0x3c, a, o);
 }
-    
+
 static void tcg_wasm_out_op_i64_store16(TCGContext *s, uint32_t a, uint32_t o)
 {
     tcg_wasm_out_op_loadstore(s, 0x3d, a, o);
@@ -858,7 +859,7 @@ static void tcg_wasm_out_i32_rotl(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg
     tcg_wasm_out_op_i32_wrap_i64(s);
     tcg_wasm_out_op_i32_rotl(s);
     tcg_wasm_out_op_i64_extend_i32_s(s);
-    tcg_wasm_out_op_global_set_r(s, ret); 
+    tcg_wasm_out_op_global_set_r(s, ret);
 }
 
 static void tcg_wasm_out_i32_rotr(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg arg2){
@@ -868,7 +869,7 @@ static void tcg_wasm_out_i32_rotr(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg
     tcg_wasm_out_op_i32_wrap_i64(s);
     tcg_wasm_out_op_i32_rotr(s);
     tcg_wasm_out_op_i64_extend_i32_s(s);
-    tcg_wasm_out_op_global_set_r(s, ret); 
+    tcg_wasm_out_op_global_set_r(s, ret);
 }
 
 static void tcg_wasm_out_clz64(TCGContext *s, TCGReg ret, TCGReg arg1, TCGReg arg2){
@@ -1546,7 +1547,7 @@ static void tcg_wasm_out_deposit_i64(TCGContext *s, TCGReg dest, TCGReg arg1, TC
     tcg_wasm_out_op_i64_and(s);
 
     tcg_wasm_out_op_i64_or(s);
-    
+
     tcg_wasm_out_op_global_set_r(s, dest);
 }
 
@@ -1602,7 +1603,7 @@ static void tcg_wasm_out_extract2_i64(TCGContext *s, TCGReg dest, TCGReg arg1, T
     tcg_wasm_out_op_global_get_r(s, arg2);
     tcg_wasm_out_op_i64_const(s, 64-pos);
     tcg_wasm_out_op_i64_shl(s);
-        
+
     tcg_wasm_out_op_global_get_r(s, arg1);
     tcg_wasm_out_op_i64_const(s, pos);
     tcg_wasm_out_op_i64_shr_u(s);
@@ -1643,7 +1644,7 @@ static void tcg_wasm_out_bswap64(TCGContext *s, TCGReg dest, TCGReg src, int fla
     tcg_wasm_out_op_i64_and(s);
     tcg_wasm_out_op_i64_const(s, 24);
     tcg_wasm_out_op_i64_shl(s); // H___D___
-    
+
     tcg_wasm_out_op_i64_or(s);
 
     tcg_wasm_out_op_i64_or(s); // HGFEDCBA
@@ -1655,7 +1656,7 @@ static void tcg_wasm_out_bswap32(TCGContext *s, TCGReg dest, TCGReg src, int fla
     tcg_wasm_out_op_global_get_r(s, src);
     tcg_wasm_out_op_i32_wrap_i64(s);
     tcg_wasm_out_op_local_set(s, TMP32_LOCAL_0_IDX);
-    
+
     tcg_wasm_out_op_local_get(s, TMP32_LOCAL_0_IDX); // ABCD
     tcg_wasm_out_op_i32_const(s, 16);
     tcg_wasm_out_op_i32_rotr(s);
@@ -1729,10 +1730,10 @@ static void tcg_wasm_out_ctx_i32_load(TCGContext *s, int off)
     tcg_wasm_out_op_i32_load(s, 0, off);
 }
 
-static void tcg_wasm_out_label_idx(TCGContext *s, int label)
+static void tcg_wasm_out_label_idx(TCGContext *s, int label) // label is label id?
 {
-    int block_idx = wasm_alloc_block_idx(s);
-    wasm_add_label_context(s, label, block_idx);
+    int block_idx = wasm_alloc_block_idx(s); // increases index
+    wasm_add_label_context(s, label, block_idx); //     label_to_block[label] = block;
 
     tcg_wasm_out_op_end(s); // end if of the previous block
 
@@ -1849,7 +1850,7 @@ static void tcg_wasm_out_goto_tb(TCGContext *s, int which)
     tcg_wasm_out_op_global_set(s, BLOCK_PTR_IDX);
     tcg_wasm_out_op_br(s, 3); // br to the top of loop
     tcg_wasm_out_op_end(s);
-    
+
     // store jmp target address to buf
     tcg_wasm_out_op_local_get(s, CTX_IDX);
     tcg_wasm_out_op_local_get(s, TMP32_LOCAL_0_IDX);
@@ -1886,7 +1887,7 @@ void gen_func_wrapper_code(TCGContext *s, const tcg_insn_unit *func, const TCGHe
         tcg_wasm_out_op_global_get_r(s, TCG_REG_CALL_STACK);
         tcg_wasm_out_op_i32_wrap_i64(s);
     }
-    
+
     nargs = 32 - clz32(typemask >> 3);
     nargs = DIV_ROUND_UP(nargs, 3);
     int stack_offset = 0;
@@ -1962,7 +1963,7 @@ void gen_func_wrapper_code(TCGContext *s, const tcg_insn_unit *func, const TCGHe
             tcg_wasm_out_op_i64_load(s, 0, stack_offset);
             tcg_wasm_out_op_global_set_r(s, TCG_REG_R0);
             stack_offset += 8;
-            
+
             tcg_wasm_out_op_global_get_r(s, TCG_REG_CALL_STACK);
             tcg_wasm_out_op_i32_wrap_i64(s);
             tcg_wasm_out_op_i64_load(s, 0, stack_offset);
@@ -1997,12 +1998,12 @@ static void gen_func_type(TCGContext *s, const TCGHelperInfo *info)
     *buf_ptr++ = 0; // vector size (placeholder)
 
     int vec_size = 0;
-    
+
     if (rettype == dh_typecode_i128) {
         *buf_ptr++ = 0x7f; // i32 (stack buffer pointer)
         vec_size++;
     }
-    
+
     for (int j = 0; j < nargs; ++j) {
         int typecode = extract32(typemask, (j + 1) * 3, 3);
         if (typecode == dh_typecode_void) {
@@ -2110,7 +2111,9 @@ static void tcg_wasm_out_call(TCGContext *s, const tcg_insn_unit *func,
 
     tcg_wasm_out_op_i32_store(s, 0, 0);
 
-    int func_idx = get_wasm_helper_idx(s, (int)func);
+    // hahmm: on the dev branch, he uses a linked list there
+    // might not be faster..
+    int func_idx = get_wasm_helper_idx(s, (int)func); // do we assume wasm32 here?
     if (func_idx < 0) {
         func_idx = wasm_register_helper_alloc_num(s);
         tcg_debug_assert(func >= 0);
@@ -2129,9 +2132,11 @@ static void tcg_wasm_out_call(TCGContext *s, const tcg_insn_unit *func,
     tcg_wasm_out_op_i64_const(s, block_idx);
     tcg_wasm_out_op_i64_le_u(s);
     tcg_wasm_out_op_if_noret(s);
-    tcg_wasm_out_ctx_i32_store_const(s, UNWINDING_OFF, 0);
+
+    // tcg_wasm_out_ctx_i32_store_const(s, UNWINDING_OFF, 0);
     gen_func_wrapper_code(s, func, info, func_idx);
 
+    /*
     tcg_wasm_out_op_i32_const(s, 1);
     tcg_wasm_out_ctx_i32_load(s, UNWINDING_OFF);
     tcg_wasm_out_op_i32_eq(s);
@@ -2139,6 +2144,7 @@ static void tcg_wasm_out_call(TCGContext *s, const tcg_insn_unit *func,
     tcg_wasm_out_op_i32_const(s, 0);
     tcg_wasm_out_op_return(s);
     tcg_wasm_out_op_end(s);
+    */
 }
 
 void tb_target_set_jmp_target(const TranslationBlock *tb, int n,
@@ -2168,7 +2174,7 @@ static uint8_t tcg_wasm_out_tlb_load(TCGContext *s, TCGReg addr, MemOpIdx oi, bo
     tcg_wasm_out_op_global_get_r(s, addr);
     tcg_wasm_out_op_i64_const(s, s->page_bits - CPU_TLB_ENTRY_BITS);
     tcg_wasm_out_op_i64_shr_u(s);
-    
+
     tcg_wasm_out_op_global_get_r_i32(s, TCG_AREG0);
     int off = mask_ofs;
     if ((int64_t)off < 0) {
@@ -2192,7 +2198,7 @@ static uint8_t tcg_wasm_out_tlb_load(TCGContext *s, TCGReg addr, MemOpIdx oi, bo
     }
     tcg_wasm_out_op_i64_load(s, 0, (uint64_t)off);
     tcg_wasm_out_op_i64_add(s);
-    
+
     tcg_wasm_out_op_i32_wrap_i64(s);
     tcg_wasm_out_op_local_tee(s, TMP32_LOCAL_0_IDX);
 
@@ -2218,7 +2224,7 @@ static uint8_t tcg_wasm_out_tlb_load(TCGContext *s, TCGReg addr, MemOpIdx oi, bo
 
     tcg_wasm_out_op_i64_const(s, 0);
     tcg_wasm_out_op_local_set(s, TMP64_0_IDX);
-    
+
     tcg_wasm_out_op_if_noret(s);
     tcg_wasm_out_op_local_get(s, TMP32_LOCAL_0_IDX);
     off = add_off;
@@ -2232,10 +2238,10 @@ static uint8_t tcg_wasm_out_tlb_load(TCGContext *s, TCGReg addr, MemOpIdx oi, bo
     tcg_wasm_out_op_global_get_r(s, addr);
     tcg_wasm_out_op_i64_add(s);
     tcg_wasm_out_op_local_set(s, TMP64_0_IDX);
-    
+
     tcg_wasm_out_op_end(s);
-    
-    
+
+
     return TMP64_0_IDX;
 }
 
@@ -2328,7 +2334,7 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, const TCGArg *args, bool is_64)
     opc = get_memop(oi);
 
     uint8_t base = tcg_wasm_out_tlb_load(s, addr_reg, oi, true);
-    
+
     tcg_wasm_out_op_local_get(s, base);
     tcg_wasm_out_op_i64_eqz(s);
     tcg_wasm_out_op_if_noret(s);
@@ -2343,8 +2349,8 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, const TCGArg *args, bool is_64)
         gen_func_type_qemu_ld(s, oi);
     }
 
-    // save function pointer
-    tcg_wasm_out_ctx_i32_store_const(s, DONE_FLAG_OFF, 0);
+    // jspi
+    // tcg_wasm_out_ctx_i32_store_const(s, DONE_FLAG_OFF, 1);
 
     tcg_wasm_out_op_else(s);
 
@@ -2359,12 +2365,12 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, const TCGArg *args, bool is_64)
 
     tcg_wasm_out_op_end(s); // close if of this block (rewind skips this)
     env_cached = false;
-    
+
     // block for calling helper (+1)
     int block_idx = wasm_alloc_block_idx(s);
     tcg_wasm_out_op_global_get(s, BLOCK_PTR_IDX);
     tcg_wasm_out_op_i64_const(s, block_idx);
-    tcg_wasm_out_op_i64_le_u(s);
+    tcg_wasm_out_op_i64_le_u(s); // compares.. block indices?
     tcg_wasm_out_op_if_noret(s);
 
     tcg_wasm_out_op_local_get(s, base);
@@ -2380,6 +2386,8 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, const TCGArg *args, bool is_64)
 
     tcg_wasm_out_op_call(s, func_idx);
     tcg_wasm_out_op_global_set_r(s, data_reg);
+
+    /*
     tcg_wasm_out_ctx_i32_load(s, DONE_FLAG_OFF);
     tcg_wasm_out_op_i32_eqz(s);
 
@@ -2387,6 +2395,7 @@ static void tcg_wasm_out_qemu_ld(TCGContext *s, const TCGArg *args, bool is_64)
     tcg_wasm_out_op_i32_const(s, 0);
     tcg_wasm_out_op_return(s);
     tcg_wasm_out_op_end(s);
+   */
     tcg_wasm_out_op_end(s);
 }
 
@@ -2473,7 +2482,8 @@ static void tcg_wasm_out_qemu_st(TCGContext *s, const TCGArg *args, bool is_64)
     }
 
     // save function pointer
-    tcg_wasm_out_ctx_i32_store_const(s, DONE_FLAG_OFF, 0);
+    // jspi
+    //tcg_wasm_out_ctx_i32_store_const(s, DONE_FLAG_OFF, 1);
 
     tcg_wasm_out_op_else(s);
 
@@ -2499,7 +2509,7 @@ static void tcg_wasm_out_qemu_st(TCGContext *s, const TCGArg *args, bool is_64)
     tcg_wasm_out_op_local_get(s, base);
     tcg_wasm_out_op_i64_eqz(s);
     tcg_wasm_out_op_if_noret(s);
-    
+
     // call helper
     tcg_wasm_out_op_global_get_r(s, TCG_AREG0);
     tcg_wasm_out_op_i32_wrap_i64(s);
@@ -2519,12 +2529,14 @@ static void tcg_wasm_out_qemu_st(TCGContext *s, const TCGArg *args, bool is_64)
 
     tcg_wasm_out_op_call(s, func_idx);
 
+    /*
     tcg_wasm_out_ctx_i32_load(s, DONE_FLAG_OFF);
     tcg_wasm_out_op_i32_eqz(s);
     tcg_wasm_out_op_if_noret(s);
     tcg_wasm_out_op_i32_const(s, 0);
     tcg_wasm_out_op_return(s);
     tcg_wasm_out_op_end(s);
+    */
     tcg_wasm_out_op_end(s);
 }
 
@@ -3346,7 +3358,7 @@ static uint8_t tcg_tci_out_qemu_ldst(TCGContext *s, TCGOpcode opc, const TCGArg 
 {
     TCGReg addr_reg = args[1];
     MemOpIdx oi = args[2];
-    
+
     MemOp mopc = get_memop(oi);
     TCGAtomAlign aa = atom_and_align_for_opc(s, mopc, MO_ATOM_IFALIGN, false);
     unsigned a_mask = (1u << aa.align) - 1;

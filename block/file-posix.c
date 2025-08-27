@@ -2513,7 +2513,8 @@ static int coroutine_fn raw_co_prw(BlockDriverState *bs, int64_t *offset_ptr,
     };
 
     assert(qiov->size == bytes);
-    ret = raw_thread_pool_submit(handle_aiocb_rw, &acb);
+    //ret = raw_thread_pool_submit(handle_aiocb_rw, &acb);
+    ret = handle_aiocb_rw(&acb);
     goto out; /* Avoid the compiler err of unused label */
 
 out:

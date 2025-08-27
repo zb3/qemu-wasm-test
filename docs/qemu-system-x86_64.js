@@ -1,6 +1,6 @@
 // This code implements the `-sMODULARIZE` settings by taking the generated
 // JS program code (INNER_JS_CODE) and wrapping it in a factory function.
-
+Error.stackTraceLimit = 400;
 // When targetting node and ES6 we use `await import ..` in the generated code
 // so the outer function needs to be marked as async.
 async function Module(moduleArg = {}) {
@@ -267,7 +267,7 @@ if (ENVIRONMENT_IS_PTHREAD) {
   self.onunhandledrejection = e => {
     throw e.reason || e;
   };
-  function handleMessage(e) {
+  async function handleMessage(e) {
     try {
       var msgData = e["data"];
       //dbg('msgData: ' + Object.keys(msgData));
@@ -328,7 +328,7 @@ if (ENVIRONMENT_IS_PTHREAD) {
           initializedJS = true;
         }
         try {
-          invokeEntryPoint(msgData.start_routine, msgData.arg);
+          await invokeEntryPoint(msgData.start_routine, msgData.arg);
         } catch (ex) {
           if (ex != "unwind") {
             // The pthread "crashed".  Do not call `_emscripten_thread_exit` (which
@@ -582,6 +582,15 @@ async function instantiateAsync(binary, binaryFile, imports) {
 
 function getWasmImports() {
   assignWasmImports();
+  // instrumenting imports is used in asyncify in two ways: to add assertions
+  // that check for proper import use, and for ASYNCIFY=2 we use them to set up
+  // the Promise API on the import side.
+  // In pthreads builds getWasmImports is called more than once but we only
+  // and the instrument the imports once.
+  if (!wasmImports.__instrumented) {
+    wasmImports.__instrumented = true;
+    Asyncify.instrumentWasmImports(wasmImports);
+  }
   // prepare imports
   return {
     "env": wasmImports,
@@ -1010,22 +1019,6 @@ var onPostRuns = [];
 
 var addOnPostRun = cb => onPostRuns.push(cb);
 
-var dynCalls = {};
-
-var dynCallLegacy = (sig, ptr, args) => {
-  sig = sig.replace(/p/g, "i");
-  var f = dynCalls[sig];
-  return f(ptr, ...args);
-};
-
-var dynCall = (sig, ptr, args = [], promising = false) => {
-  var rtn = dynCallLegacy(sig, ptr, args);
-  function convert(rtn) {
-    return sig[0] == "p" ? rtn >>> 0 : rtn;
-  }
-  return convert(rtn);
-};
-
 function establishStackSpace(pthread_ptr) {
   var stackHigh = HEAPU32[(((pthread_ptr) + (52)) >>> 2) >>> 0];
   var stackSize = HEAPU32[(((pthread_ptr) + (56)) >>> 2) >>> 0];
@@ -1072,7 +1065,27 @@ function establishStackSpace(pthread_ptr) {
   }
 }
 
-var invokeEntryPoint = (ptr, arg) => {
+var wasmTableMirror = [];
+var wasmTableIsAsync = [];
+
+/** @type {WebAssembly.Table} */ var wasmTable;
+
+var getWasmTableEntry = (funcPtr, forceAsync=false) => {
+  var func = wasmTableMirror[funcPtr];
+  if (forceAsync && func && !wasmTableIsAsync[funcPtr]) {
+    func = null;
+  }
+  if (!func) {
+    /** @suppress {checkTypes} */ wasmTableMirror[funcPtr] = func = wasmTable.get(funcPtr);
+    if (forceAsync || Asyncify.isAsyncExport(func)) {
+      wasmTableMirror[funcPtr] = func = Asyncify.makeAsyncFunction(func);
+      wasmTableIsAsync[funcPtr] = true;
+    }
+  }
+  return func;
+};
+
+var invokeEntryPoint = async (ptr, arg) => {
   // An old thread on this worker may have been canceled without returning the
   // `runtimeKeepaliveCounter` to zero. Reset it now so the new thread won't
   // be affected.
@@ -1093,7 +1106,7 @@ var invokeEntryPoint = (ptr, arg) => {
   // *ThreadMain(void *arg) form, or try linking with the Emscripten linker
   // flag -sEMULATE_FUNCTION_POINTER_CASTS to add in emulation for this x86
   // ABI extension.
-  var result = (a1 => dynCall_ii(ptr, a1))(arg);
+  var result = getWasmTableEntry(ptr, true)(arg);
   function finish(result) {
     if (keepRuntimeAlive()) {
       EXITSTATUS = result;
@@ -1101,6 +1114,7 @@ var invokeEntryPoint = (ptr, arg) => {
       __emscripten_thread_exit(result);
     }
   }
+  result = await result;
   finish(result);
 };
 
@@ -1249,10 +1263,10 @@ function ___assert_fail(condition, filename, line, func) {
   return abort(`Assertion failed: ${UTF8ToString(condition)}, at: ` + [ filename ? UTF8ToString(filename) : "unknown filename", line, func ? UTF8ToString(func) : "unknown function" ]);
 }
 
-var ___call_sighandler = function(fp, sig) {
+function ___call_sighandler(fp, sig) {
   fp >>>= 0;
-  return (a1 => dynCall_vi(fp, a1))(sig);
-};
+  return getWasmTableEntry(fp)(sig);
+}
 
 function pthreadCreateProxied(pthread_ptr, attr, startRoutine, arg) {
   if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(2, 0, 1, pthread_ptr, attr, startRoutine, arg);
@@ -3811,7 +3825,7 @@ var SOCKFS = {
     SOCKFS.callbacks[event]?.(param);
   },
   mount(mount) {
-    // The incomming Module['websocket'] can be used for configuring 
+    // The incomming Module['websocket'] can be used for configuring
     // configuring subprotocol/url, etc
     SOCKFS.websocketArgs = Module["websocket"] || {};
     // Add the Event registration mechanism to the exported websocket configuration
@@ -8147,7 +8161,7 @@ var registerRestoreOldStyle = canvas => {
       canvas.style.imageRendering = oldImageRendering;
       if (canvas.GLctxObject) canvas.GLctxObject.GLctx.viewport(0, 0, oldWidth, oldHeight);
       if (currentFullscreenStrategy.canvasResizedCallback) {
-        if (currentFullscreenStrategy.canvasResizedCallbackTargetThread) __emscripten_run_callback_on_thread(currentFullscreenStrategy.canvasResizedCallbackTargetThread, currentFullscreenStrategy.canvasResizedCallback, 37, 0, currentFullscreenStrategy.canvasResizedCallbackUserData); else ((a1, a2, a3) => dynCall_iiii(currentFullscreenStrategy.canvasResizedCallback, a1, a2, a3))(37, 0, currentFullscreenStrategy.canvasResizedCallbackUserData);
+        if (currentFullscreenStrategy.canvasResizedCallbackTargetThread) __emscripten_run_callback_on_thread(currentFullscreenStrategy.canvasResizedCallbackTargetThread, currentFullscreenStrategy.canvasResizedCallback, 37, 0, currentFullscreenStrategy.canvasResizedCallbackUserData); else getWasmTableEntry(currentFullscreenStrategy.canvasResizedCallback)(37, 0, currentFullscreenStrategy.canvasResizedCallbackUserData);
       }
     }
   }
@@ -8236,7 +8250,7 @@ var JSEvents_requestFullscreen = (target, strategy) => {
   }
   currentFullscreenStrategy = strategy;
   if (strategy.canvasResizedCallback) {
-    if (strategy.canvasResizedCallbackTargetThread) __emscripten_run_callback_on_thread(strategy.canvasResizedCallbackTargetThread, strategy.canvasResizedCallback, 37, 0, strategy.canvasResizedCallbackUserData); else ((a1, a2, a3) => dynCall_iiii(strategy.canvasResizedCallback, a1, a2, a3))(37, 0, strategy.canvasResizedCallbackUserData);
+    if (strategy.canvasResizedCallbackTargetThread) __emscripten_run_callback_on_thread(strategy.canvasResizedCallbackTargetThread, strategy.canvasResizedCallback, 37, 0, strategy.canvasResizedCallbackUserData); else getWasmTableEntry(strategy.canvasResizedCallback)(37, 0, strategy.canvasResizedCallbackUserData);
   }
   return 0;
 };
@@ -8299,28 +8313,29 @@ var Asyncify = {
     for (let [x, original] of Object.entries(imports)) {
       if (typeof original == "function") {
         let isAsyncifyImport = original.isAsync || importPattern.test(x);
+        // Wrap async imports with a suspending WebAssembly function.
+        if (isAsyncifyImport) {
+          imports[x] = original = new WebAssembly.Suspending(original);
+        }
       }
     }
   },
   instrumentFunction(original) {
-    var wrapper = (...args) => {
-      Asyncify.exportCallStack.push(original);
-      try {
-        return original(...args);
-      } finally {
-        if (!ABORT) {
-          var top = Asyncify.exportCallStack.pop();
-          Asyncify.maybeStopUnwind();
-        }
-      }
-    };
-    Asyncify.funcWrappers.set(original, wrapper);
+    var wrapper = (...args) => original(...args);
     return wrapper;
   },
   instrumentWasmExports(exports) {
+    var exportPattern = /^(main|__main_argc_argv)$/;
+    Asyncify.asyncExports = new Set;
     var ret = {};
     for (let [x, original] of Object.entries(exports)) {
       if (typeof original == "function") {
+        // Wrap all exports with a promising WebAssembly function.
+        let isAsyncifyExport = exportPattern.test(x);
+        if (isAsyncifyExport) {
+          Asyncify.asyncExports.add(original);
+          original = Asyncify.makeAsyncFunction(original);
+        }
         var wrapper = Asyncify.instrumentFunction(original);
         ret[x] = wrapper;
       } else {
@@ -8329,178 +8344,27 @@ var Asyncify = {
     }
     return ret;
   },
-  State: {
-    Normal: 0,
-    Unwinding: 1,
-    Rewinding: 2,
-    Disabled: 3
+  asyncExports: null,
+  isAsyncExport(func) {
+    return Asyncify.asyncExports?.has(func);
   },
-  state: 0,
-  StackSize: 4096,
-  currData: null,
-  handleSleepReturnValue: 0,
-  exportCallStack: [],
-  callstackFuncToId: new Map,
-  callStackIdToFunc: new Map,
-  funcWrappers: new Map,
-  callStackId: 0,
-  asyncPromiseHandlers: null,
-  sleepCallbacks: [],
-  getCallStackId(func) {
-    if (!Asyncify.callstackFuncToId.has(func)) {
-      var id = Asyncify.callStackId++;
-      Asyncify.callstackFuncToId.set(func, id);
-      Asyncify.callStackIdToFunc.set(id, func);
-    }
-    return Asyncify.callstackFuncToId.get(func);
-  },
-  maybeStopUnwind() {
-    if (Asyncify.currData && Asyncify.state === Asyncify.State.Unwinding && Asyncify.exportCallStack.length === 0) {
-      // We just finished unwinding.
-      // Be sure to set the state before calling any other functions to avoid
-      // possible infinite recursion here (For example in debug pthread builds
-      // the dbg() function itself can call back into WebAssembly to get the
-      // current pthread_self() pointer).
-      Asyncify.state = Asyncify.State.Normal;
-      runtimeKeepalivePush();
-      // Keep the runtime alive so that a re-wind can be done later.
-      runAndAbortIfError(_asyncify_stop_unwind);
-      if (typeof Fibers != "undefined") {
-        Fibers.trampoline();
-      }
+  handleAsync: async startAsync => {
+    runtimeKeepalivePush();
+    try {
+      return await startAsync();
+    } finally {
+      runtimeKeepalivePop();
     }
   },
-  whenDone() {
-    return new Promise((resolve, reject) => {
-      Asyncify.asyncPromiseHandlers = {
-        resolve,
-        reject
-      };
-    });
-  },
-  allocateData() {
-    // An asyncify data structure has three fields:
-    //  0  current stack pos
-    //  4  max stack pos
-    //  8  id of function at bottom of the call stack (callStackIdToFunc[id] == wasm func)
-    // The Asyncify ABI only interprets the first two fields, the rest is for the runtime.
-    // We also embed a stack in the same memory region here, right next to the structure.
-    // This struct is also defined as asyncify_data_t in emscripten/fiber.h
-    var ptr = _malloc(12 + Asyncify.StackSize);
-    Asyncify.setDataHeader(ptr, ptr + 12, Asyncify.StackSize);
-    Asyncify.setDataRewindFunc(ptr);
-    return ptr;
-  },
-  setDataHeader(ptr, stack, stackSize) {
-    HEAPU32[((ptr) >>> 2) >>> 0] = stack;
-    HEAPU32[(((ptr) + (4)) >>> 2) >>> 0] = stack + stackSize;
-  },
-  setDataRewindFunc(ptr) {
-    var bottomOfCallStack = Asyncify.exportCallStack[0];
-    var rewindId = Asyncify.getCallStackId(bottomOfCallStack);
-    HEAP32[(((ptr) + (8)) >>> 2) >>> 0] = rewindId;
-  },
-  getDataRewindFunc(ptr) {
-    var id = HEAP32[(((ptr) + (8)) >>> 2) >>> 0];
-    var func = Asyncify.callStackIdToFunc.get(id);
-    return func;
-  },
-  doRewind(ptr) {
-    var original = Asyncify.getDataRewindFunc(ptr);
-    var func = Asyncify.funcWrappers.get(original);
-    // Once we have rewound and the stack we no longer need to artificially
-    // keep the runtime alive.
-    runtimeKeepalivePop();
-    return func();
-  },
-  handleSleep(startAsync) {
-    if (ABORT) return;
-    if (Asyncify.state === Asyncify.State.Normal) {
-      // Prepare to sleep. Call startAsync, and see what happens:
-      // if the code decided to call our callback synchronously,
-      // then no async operation was in fact begun, and we don't
-      // need to do anything.
-      var reachedCallback = false;
-      var reachedAfterCallback = false;
-      startAsync((handleSleepReturnValue = 0) => {
-        if (ABORT) return;
-        Asyncify.handleSleepReturnValue = handleSleepReturnValue;
-        reachedCallback = true;
-        if (!reachedAfterCallback) {
-          // We are happening synchronously, so no need for async.
-          return;
-        }
-        Asyncify.state = Asyncify.State.Rewinding;
-        runAndAbortIfError(() => _asyncify_start_rewind(Asyncify.currData));
-        if (typeof MainLoop != "undefined" && MainLoop.func) {
-          MainLoop.resume();
-        }
-        var asyncWasmReturnValue, isError = false;
-        try {
-          asyncWasmReturnValue = Asyncify.doRewind(Asyncify.currData);
-        } catch (err) {
-          asyncWasmReturnValue = err;
-          isError = true;
-        }
-        // Track whether the return value was handled by any promise handlers.
-        var handled = false;
-        if (!Asyncify.currData) {
-          // All asynchronous execution has finished.
-          // `asyncWasmReturnValue` now contains the final
-          // return value of the exported async WASM function.
-          // Note: `asyncWasmReturnValue` is distinct from
-          // `Asyncify.handleSleepReturnValue`.
-          // `Asyncify.handleSleepReturnValue` contains the return
-          // value of the last C function to have executed
-          // `Asyncify.handleSleep()`, where as `asyncWasmReturnValue`
-          // contains the return value of the exported WASM function
-          // that may have called C functions that
-          // call `Asyncify.handleSleep()`.
-          var asyncPromiseHandlers = Asyncify.asyncPromiseHandlers;
-          if (asyncPromiseHandlers) {
-            Asyncify.asyncPromiseHandlers = null;
-            (isError ? asyncPromiseHandlers.reject : asyncPromiseHandlers.resolve)(asyncWasmReturnValue);
-            handled = true;
-          }
-        }
-        if (isError && !handled) {
-          // If there was an error and it was not handled by now, we have no choice but to
-          // rethrow that error into the global scope where it can be caught only by
-          // `onerror` or `onunhandledpromiserejection`.
-          throw asyncWasmReturnValue;
-        }
-      });
-      reachedAfterCallback = true;
-      if (!reachedCallback) {
-        // A true async operation was begun; start a sleep.
-        Asyncify.state = Asyncify.State.Unwinding;
-        // TODO: reuse, don't alloc/free every sleep
-        Asyncify.currData = Asyncify.allocateData();
-        if (typeof MainLoop != "undefined" && MainLoop.func) {
-          MainLoop.pause();
-        }
-        runAndAbortIfError(() => _asyncify_start_unwind(Asyncify.currData));
-      }
-    } else if (Asyncify.state === Asyncify.State.Rewinding) {
-      // Stop a resume.
-      Asyncify.state = Asyncify.State.Normal;
-      runAndAbortIfError(_asyncify_stop_rewind);
-      _free(Asyncify.currData);
-      Asyncify.currData = null;
-      // Call all sleep callbacks now that the sleep-resume is all done.
-      Asyncify.sleepCallbacks.forEach(callUserCallback);
-    } else {
-      abort(`invalid state: ${Asyncify.state}`);
-    }
-    return Asyncify.handleSleepReturnValue;
-  },
-  handleAsync: startAsync => Asyncify.handleSleep(wakeUp => {
-    // TODO: add error handling as a second param when handleSleep implements it.
-    startAsync().then(wakeUp);
-  })
+  handleSleep: startAsync => Asyncify.handleAsync(() => new Promise(startAsync)),
+  makeAsyncFunction(original) {
+    return WebAssembly.promising(original);
+  }
 };
 
 var Fibers = {
+  topPromiseId: 0,
+  resolvers: [],
   nextFiber: 0,
   trampolineRunning: false,
   trampoline() {
@@ -8519,18 +8383,17 @@ var Fibers = {
     var stack_max = HEAPU32[(((newFiber) + (4)) >>> 2) >>> 0];
     _emscripten_stack_set_limits(stack_base, stack_max);
     stackRestore(HEAPU32[(((newFiber) + (8)) >>> 2) >>> 0]);
-    var entryPoint = HEAPU32[(((newFiber) + (12)) >>> 2) >>> 0];
-    if (entryPoint !== 0) {
-      Asyncify.currData = null;
+    const promiseId = HEAP32[(((newFiber) + (28)) >>> 2) >>> 0];
+    if (promiseId !== 0) {
+      Fibers.resolvers[promiseId]();
+    } else {
+      var entryPoint = HEAPU32[(((newFiber) + (12)) >>> 2) >>> 0];
+      // when it suspends we'll write promiseid, so not sure if this is also needed
       HEAPU32[(((newFiber) + (12)) >>> 2) >>> 0] = 0;
       var userData = HEAPU32[(((newFiber) + (16)) >>> 2) >>> 0];
-      (a1 => dynCall_vi(entryPoint, a1))(userData);
-    } else {
-      var asyncifyData = newFiber + 20;
-      Asyncify.currData = asyncifyData;
-      Asyncify.state = Asyncify.State.Rewinding;
-      _asyncify_start_rewind(asyncifyData);
-      Asyncify.doRewind(asyncifyData);
+      // KOKO: this calls .promising() each time
+      // while only once per coroutine, this doesn't use cache;
+      getWasmTableEntry(entryPoint, true)(userData);
     }
   }
 };
@@ -8539,20 +8402,25 @@ function _emscripten_fiber_swap(oldFiber, newFiber) {
   oldFiber >>>= 0;
   newFiber >>>= 0;
   if (ABORT) return;
-  if (Asyncify.state === Asyncify.State.Normal) {
-    Asyncify.state = Asyncify.State.Unwinding;
-    var asyncifyData = oldFiber + 20;
-    Asyncify.setDataRewindFunc(asyncifyData);
-    Asyncify.currData = asyncifyData;
-    _asyncify_start_unwind(asyncifyData);
-    var stackTop = stackSave();
-    HEAPU32[(((oldFiber) + (8)) >>> 2) >>> 0] = stackTop;
-    Fibers.nextFiber = newFiber;
-  } else {
-    Asyncify.state = Asyncify.State.Normal;
-    _asyncify_stop_rewind();
-    Asyncify.currData = null;
+  var stackTop = stackSave();
+  HEAPU32[(((oldFiber) + (8)) >>> 2) >>> 0] = stackTop;
+  Fibers.nextFiber = newFiber;
+  let promiseId = HEAP32[(((oldFiber) + (28)) >>> 2) >>> 0];
+  if (!promiseId) {
+    Fibers.topPromiseId++;
+    promiseId = Fibers.topPromiseId;
   }
+  HEAP32[(((oldFiber) + (28)) >>> 2) >>> 0] = promiseId;
+  const promise = new Promise((resolve, reject) => {
+    Fibers.resolvers[promiseId] = resolve;
+  });
+  // exceptions? what abt coroutines + setjmp? oh my
+  // if we're to reject continuations, where do we put a try block? trampoline?
+  // maybe we should modify those tests to see how the previous code'd react?
+  if (!Fibers.trampolineRunning) {
+    queueMicrotask(Fibers.trampoline);
+  }
+  return promise;
 }
 
 _emscripten_fiber_swap.isAsync = true;
@@ -10564,7 +10432,7 @@ var _emscripten_glVertexAttribPointer = _glVertexAttribPointer;
 
 var _emscripten_glViewport = _glViewport;
 
-var _emscripten_has_asyncify = () => 1;
+var _emscripten_has_asyncify = () => 2;
 
 var _emscripten_num_logical_cores = () => ENVIRONMENT_IS_NODE ? require("os").cpus().length : navigator["hardwareConcurrency"];
 
@@ -10648,7 +10516,7 @@ var _emscripten_runtime_keepalive_check = keepRuntimeAlive;
 var registerBeforeUnloadEventCallback = (target, userData, useCapture, callbackfunc, eventTypeId, eventTypeString) => {
   var beforeUnloadEventHandlerFunc = (e = event) => {
     // Note: This is always called on the main browser thread, since it needs synchronously return a value!
-    var confirmationMessage = ((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, 0, userData);
+    var confirmationMessage = getWasmTableEntry(callbackfunc)(eventTypeId, 0, userData);
     if (confirmationMessage) {
       confirmationMessage = UTF8ToString(confirmationMessage);
     }
@@ -10689,7 +10557,7 @@ var registerFocusEventCallback = (target, userData, useCapture, callbackfunc, ev
     var focusEvent = targetThread ? _malloc(256) : JSEvents.focusEvent;
     stringToUTF8(nodeName, focusEvent + 0, 128);
     stringToUTF8(id, focusEvent + 128, 128);
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, focusEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, focusEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, focusEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, focusEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target: findEventTarget(target),
@@ -10757,7 +10625,7 @@ var registerFullscreenChangeEventCallback = (target, userData, useCapture, callb
   var fullscreenChangeEventhandlerFunc = (e = event) => {
     var fullscreenChangeEvent = targetThread ? _malloc(276) : JSEvents.fullscreenChangeEvent;
     fillFullscreenChangeEventData(fullscreenChangeEvent);
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, fullscreenChangeEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, fullscreenChangeEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, fullscreenChangeEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, fullscreenChangeEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target,
@@ -10790,7 +10658,7 @@ var registerGamepadEventCallback = (target, userData, useCapture, callbackfunc, 
   var gamepadEventHandlerFunc = (e = event) => {
     var gamepadEvent = targetThread ? _malloc(1240) : JSEvents.gamepadEvent;
     fillGamepadEventData(gamepadEvent, e["gamepad"]);
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, gamepadEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, gamepadEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, gamepadEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, gamepadEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target: findEventTarget(target),
@@ -10842,7 +10710,7 @@ var registerKeyEventCallback = (target, userData, useCapture, callbackfunc, even
     stringToUTF8(e.code || "", keyEventData + 64, 32);
     stringToUTF8(e.char || "", keyEventData + 96, 32);
     stringToUTF8(e.locale || "", keyEventData + 128, 32);
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, keyEventData, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, keyEventData, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, keyEventData, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, keyEventData, userData)) e.preventDefault();
   };
   var eventHandler = {
     target: findEventTarget(target),
@@ -10914,7 +10782,7 @@ var registerMouseEventCallback = (target, userData, useCapture, callbackfunc, ev
       // This allocated block is passed as satellite data to the proxied function call, so the call frees up the data block when done.
       fillMouseEventData(mouseEventData, e, target);
       __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, mouseEventData, userData);
-    } else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, JSEvents.mouseEvent, userData)) e.preventDefault();
+    } else if (getWasmTableEntry(callbackfunc)(eventTypeId, JSEvents.mouseEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target,
@@ -10990,7 +10858,7 @@ var registerPointerlockChangeEventCallback = (target, userData, useCapture, call
   var pointerlockChangeEventHandlerFunc = (e = event) => {
     var pointerlockChangeEvent = targetThread ? _malloc(257) : JSEvents.pointerlockChangeEvent;
     fillPointerlockChangeEventData(pointerlockChangeEvent);
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, pointerlockChangeEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, pointerlockChangeEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, pointerlockChangeEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, pointerlockChangeEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target,
@@ -11046,7 +10914,7 @@ var registerUiEventCallback = (target, userData, useCapture, callbackfunc, event
     HEAP32[(((uiEvent) + (28)) >>> 2) >>> 0] = pageXOffset | 0;
     // scroll offsets are float
     HEAP32[(((uiEvent) + (32)) >>> 2) >>> 0] = pageYOffset | 0;
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, uiEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, uiEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, uiEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, uiEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target,
@@ -11120,7 +10988,7 @@ var registerTouchEventCallback = (target, userData, useCapture, callbackfunc, ev
       }
     }
     HEAP32[(((touchEvent) + (8)) >>> 2) >>> 0] = numTouches;
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, touchEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, touchEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, touchEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, touchEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target,
@@ -11183,7 +11051,7 @@ var registerVisibilityChangeEventCallback = (target, userData, useCapture, callb
   var visibilityChangeEventHandlerFunc = (e = event) => {
     var visibilityChangeEvent = targetThread ? _malloc(8) : JSEvents.visibilityChangeEvent;
     fillVisibilityChangeEventData(visibilityChangeEvent);
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, visibilityChangeEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, visibilityChangeEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, visibilityChangeEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, visibilityChangeEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target,
@@ -11218,7 +11086,7 @@ var registerWheelEventCallback = (target, userData, useCapture, callbackfunc, ev
     HEAPF64[(((wheelEvent) + (72)) >>> 3) >>> 0] = e["deltaY"];
     HEAPF64[(((wheelEvent) + (80)) >>> 3) >>> 0] = e["deltaZ"];
     HEAP32[(((wheelEvent) + (88)) >>> 2) >>> 0] = e["deltaMode"];
-    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, wheelEvent, userData); else if (((a1, a2, a3) => dynCall_iiii(callbackfunc, a1, a2, a3))(eventTypeId, wheelEvent, userData)) e.preventDefault();
+    if (targetThread) __emscripten_run_callback_on_thread(targetThread, callbackfunc, eventTypeId, wheelEvent, userData); else if (getWasmTableEntry(callbackfunc)(eventTypeId, wheelEvent, userData)) e.preventDefault();
   };
   var eventHandler = {
     target,
@@ -11705,18 +11573,6 @@ function _random_get(buffer, size) {
   }
 }
 
-var wasmTableMirror = [];
-
-/** @type {WebAssembly.Table} */ var wasmTable;
-
-var getWasmTableEntry = funcPtr => {
-  var func = wasmTableMirror[funcPtr];
-  if (!func) {
-    /** @suppress {checkTypes} */ wasmTableMirror[funcPtr] = func = wasmTable.get(funcPtr);
-  }
-  return func;
-};
-
 var setWasmTableEntry = (idx, func) => {
   /** @suppress {checkTypes} */ wasmTable.set(idx, func);
   // With ABORT_ON_WASM_EXCEPTIONS wasmTable.get is overridden to return wrapped
@@ -11803,6 +11659,21 @@ var convertJsFunctionToWasm = (func, sig) => {
       });
     });
   });
+};
+
+var dynCall = (sig, ptr, args = [], promising = false) => {
+  var func = getWasmTableEntry(ptr);
+  //if (promising) {
+  //  func = WebAssembly.promising(func);
+  //}
+  var rtn = func(...args);
+  function convert(rtn) {
+    return sig[0] == "p" ? rtn >>> 0 : rtn;
+  }
+  if (promising) {
+    return rtn.then(convert);
+  }
+  return convert(rtn);
 };
 
 var ptrToString = ptr => "0x" + ptr.toString(16).padStart(8, "0");
@@ -12300,6 +12171,8 @@ function instantiate_wasm() {
   return fidx;
 }
 
+instantiate_wasm.sig = "i";
+
 function remove_module_js() {
   const memory_v = new DataView(HEAP8.buffer);
   const remove_n = memory_v.getInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, true);
@@ -12308,6 +12181,8 @@ function remove_module_js() {
   }
   memory_v.setInt32(Module.__wasm32_tb.to_remove_instance_idx_ptr, 0, true);
 }
+
+remove_module_js.sig = "v";
 
 function init_wasm32_js(tb_ptr_ptr, cur_core_num, to_remove_instance_ptr, to_remove_instance_idx_ptr, instance_garbage_collected_ptr) {
   Module.__wasm32_tb = {
@@ -12325,6 +12200,8 @@ function init_wasm32_js(tb_ptr_ptr, cur_core_num, to_remove_instance_ptr, to_rem
     })
   };
 }
+
+init_wasm32_js.sig = "viiiii";
 
 function unbox_small_structs(type_ptr) {
   var type_id = HEAPU16[(type_ptr + 6 >> 1) + 0 >>> 0];
@@ -12347,7 +12224,7 @@ function unbox_small_structs(type_ptr) {
   return [ type_ptr, type_id ];
 }
 
-function ffi_call_js(cif, fn, rvalue, avalue) {
+async function ffi_call_js(cif, fn, rvalue, avalue) {
   var abi = HEAPU32[(cif >> 2) + 0 >>> 0];
   var nargs = HEAPU32[(cif >> 2) + 1 >>> 0];
   var nfixedargs = HEAPU32[(cif >> 2) + 6 >>> 0];
@@ -12503,7 +12380,7 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
   stackRestore(cur_stack_ptr);
   stackAlloc(0);
   0;
-  var result = getWasmTableEntry(fn).apply(null, args);
+  var result = await ((getWasmTableEntry(fn, true)).apply(null, args));
   stackRestore(orig_stack_ptr);
   if (ret_by_arg) {
     return;
@@ -12549,6 +12426,8 @@ function ffi_call_js(cif, fn, rvalue, avalue) {
     throw new Error("Unexpected rtype " + rtype_id);
   }
 }
+
+ffi_call_js.sig = "viiii";
 
 function ffi_closure_alloc_js(size, code) {
   var closure = _malloc(size);
@@ -12796,7 +12675,7 @@ function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
 }
 
 // Imports from the Wasm binary.
-var _ntohs, _htonl, _htons, _malloc, _free, _calloc, _main, _pthread_self, _realloc, _emscripten_builtin_free, __emscripten_tls_init, _emscripten_builtin_memalign, __emscripten_proxy_main, __emscripten_run_callback_on_thread, __emscripten_set_offscreencanvas_size_on_thread, _emscripten_builtin_malloc, ___libc_calloc, ___libc_free, ___libc_malloc, __emscripten_thread_init, __emscripten_thread_crashed, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, _strndup, __emscripten_check_mailbox, __ZdaPv, __ZdaPvm, __ZdlPv, __ZdlPvm, __Znaj, __ZnajSt11align_val_t, __Znwj, __ZnwjSt11align_val_t, ___libc_realloc, _emscripten_builtin_calloc, _emscripten_builtin_realloc, _malloc_size, _malloc_usable_size, _reallocf, ___trap, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, dynCall_v, dynCall_ji, dynCall_viii, dynCall_iiii, dynCall_ii, dynCall_vi, dynCall_vii, dynCall_iji, dynCall_viji, dynCall_vji, dynCall_ijiii, dynCall_iii, dynCall_viiii, dynCall_viiiii, dynCall_iiiii, dynCall_ij, dynCall_iiiiii, dynCall_iiiiiii, dynCall_jii, dynCall_viij, dynCall_iiiiij, dynCall_iiij, dynCall_iiiji, dynCall_jiji, dynCall_vijji, dynCall_viid, dynCall_iijiii, dynCall_iijjii, dynCall_iij, dynCall_viiiiiii, dynCall_ijiiii, dynCall_viijj, dynCall_iiji, dynCall_jiijj, dynCall_vijiii, dynCall_i, dynCall_vjiii, dynCall_viijii, dynCall_viiiijjii, dynCall_iijji, dynCall_iijj, dynCall_jijii, dynCall_iiiiiiii, dynCall_viiiiii, dynCall_viiiiiiii, dynCall_vij, dynCall_jiii, dynCall_iijiiiii, dynCall_jjjji, dynCall_jijj, dynCall_vijjjj, dynCall_jij, dynCall_viijij, dynCall_viiij, dynCall_vijj, dynCall_jjj, dynCall_viiiiji, dynCall_iijiiiji, dynCall_viiji, dynCall_vijii, dynCall_jijjji, dynCall_iijii, dynCall_jijji, dynCall_j, dynCall_iiijj, dynCall_iiiiiiiii, dynCall_iiijjiii, dynCall_iijjiii, dynCall_iijiiii, dynCall_iijjiiii, dynCall_iiijijjii, dynCall_iiijiiiii, dynCall_vijjii, dynCall_iiiiiiiiii, dynCall_iiiiiiiiiiiiiiff, dynCall_viiiiiiiiiii, dynCall_iiiiiidiiff, dynCall_vffff, dynCall_vf, dynCall_viiiiiiiii, dynCall_vff, dynCall_vfi, dynCall_viif, dynCall_vif, dynCall_viff, dynCall_vifff, dynCall_viffff, dynCall_vfff, dynCall_iidiiii, _asyncify_start_unwind, _asyncify_stop_unwind, _asyncify_start_rewind, _asyncify_stop_rewind;
+var _ntohs, _htonl, _htons, _malloc, _free, _calloc, _main, _pthread_self, _realloc, _emscripten_builtin_free, __emscripten_tls_init, _emscripten_builtin_memalign, __emscripten_proxy_main, __emscripten_run_callback_on_thread, __emscripten_set_offscreencanvas_size_on_thread, _emscripten_builtin_malloc, ___libc_calloc, ___libc_free, ___libc_malloc, __emscripten_thread_init, __emscripten_thread_crashed, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, _strndup, __emscripten_check_mailbox, __ZdaPv, __ZdaPvm, __ZdlPv, __ZdlPvm, __Znaj, __ZnajSt11align_val_t, __Znwj, __ZnwjSt11align_val_t, ___libc_realloc, _emscripten_builtin_calloc, _emscripten_builtin_realloc, _malloc_size, _malloc_usable_size, _reallocf, ___trap, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current;
 
 function assignWasmExports(wasmExports) {
   _ntohs = wasmExports["ntohs"];
@@ -12844,99 +12723,6 @@ function assignWasmExports(wasmExports) {
   __emscripten_stack_restore = wasmExports["_emscripten_stack_restore"];
   __emscripten_stack_alloc = wasmExports["_emscripten_stack_alloc"];
   _emscripten_stack_get_current = wasmExports["emscripten_stack_get_current"];
-  dynCalls["v"] = dynCall_v = wasmExports["dynCall_v"];
-  dynCalls["ji"] = dynCall_ji = wasmExports["dynCall_ji"];
-  dynCalls["viii"] = dynCall_viii = wasmExports["dynCall_viii"];
-  dynCalls["iiii"] = dynCall_iiii = wasmExports["dynCall_iiii"];
-  dynCalls["ii"] = dynCall_ii = wasmExports["dynCall_ii"];
-  dynCalls["vi"] = dynCall_vi = wasmExports["dynCall_vi"];
-  dynCalls["vii"] = dynCall_vii = wasmExports["dynCall_vii"];
-  dynCalls["iji"] = dynCall_iji = wasmExports["dynCall_iji"];
-  dynCalls["viji"] = dynCall_viji = wasmExports["dynCall_viji"];
-  dynCalls["vji"] = dynCall_vji = wasmExports["dynCall_vji"];
-  dynCalls["ijiii"] = dynCall_ijiii = wasmExports["dynCall_ijiii"];
-  dynCalls["iii"] = dynCall_iii = wasmExports["dynCall_iii"];
-  dynCalls["viiii"] = dynCall_viiii = wasmExports["dynCall_viiii"];
-  dynCalls["viiiii"] = dynCall_viiiii = wasmExports["dynCall_viiiii"];
-  dynCalls["iiiii"] = dynCall_iiiii = wasmExports["dynCall_iiiii"];
-  dynCalls["ij"] = dynCall_ij = wasmExports["dynCall_ij"];
-  dynCalls["iiiiii"] = dynCall_iiiiii = wasmExports["dynCall_iiiiii"];
-  dynCalls["iiiiiii"] = dynCall_iiiiiii = wasmExports["dynCall_iiiiiii"];
-  dynCalls["jii"] = dynCall_jii = wasmExports["dynCall_jii"];
-  dynCalls["viij"] = dynCall_viij = wasmExports["dynCall_viij"];
-  dynCalls["iiiiij"] = dynCall_iiiiij = wasmExports["dynCall_iiiiij"];
-  dynCalls["iiij"] = dynCall_iiij = wasmExports["dynCall_iiij"];
-  dynCalls["iiiji"] = dynCall_iiiji = wasmExports["dynCall_iiiji"];
-  dynCalls["jiji"] = dynCall_jiji = wasmExports["dynCall_jiji"];
-  dynCalls["vijji"] = dynCall_vijji = wasmExports["dynCall_vijji"];
-  dynCalls["viid"] = dynCall_viid = wasmExports["dynCall_viid"];
-  dynCalls["iijiii"] = dynCall_iijiii = wasmExports["dynCall_iijiii"];
-  dynCalls["iijjii"] = dynCall_iijjii = wasmExports["dynCall_iijjii"];
-  dynCalls["iij"] = dynCall_iij = wasmExports["dynCall_iij"];
-  dynCalls["viiiiiii"] = dynCall_viiiiiii = wasmExports["dynCall_viiiiiii"];
-  dynCalls["ijiiii"] = dynCall_ijiiii = wasmExports["dynCall_ijiiii"];
-  dynCalls["viijj"] = dynCall_viijj = wasmExports["dynCall_viijj"];
-  dynCalls["iiji"] = dynCall_iiji = wasmExports["dynCall_iiji"];
-  dynCalls["jiijj"] = dynCall_jiijj = wasmExports["dynCall_jiijj"];
-  dynCalls["vijiii"] = dynCall_vijiii = wasmExports["dynCall_vijiii"];
-  dynCalls["i"] = dynCall_i = wasmExports["dynCall_i"];
-  dynCalls["vjiii"] = dynCall_vjiii = wasmExports["dynCall_vjiii"];
-  dynCalls["viijii"] = dynCall_viijii = wasmExports["dynCall_viijii"];
-  dynCalls["viiiijjii"] = dynCall_viiiijjii = wasmExports["dynCall_viiiijjii"];
-  dynCalls["iijji"] = dynCall_iijji = wasmExports["dynCall_iijji"];
-  dynCalls["iijj"] = dynCall_iijj = wasmExports["dynCall_iijj"];
-  dynCalls["jijii"] = dynCall_jijii = wasmExports["dynCall_jijii"];
-  dynCalls["iiiiiiii"] = dynCall_iiiiiiii = wasmExports["dynCall_iiiiiiii"];
-  dynCalls["viiiiii"] = dynCall_viiiiii = wasmExports["dynCall_viiiiii"];
-  dynCalls["viiiiiiii"] = dynCall_viiiiiiii = wasmExports["dynCall_viiiiiiii"];
-  dynCalls["vij"] = dynCall_vij = wasmExports["dynCall_vij"];
-  dynCalls["jiii"] = dynCall_jiii = wasmExports["dynCall_jiii"];
-  dynCalls["iijiiiii"] = dynCall_iijiiiii = wasmExports["dynCall_iijiiiii"];
-  dynCalls["jjjji"] = dynCall_jjjji = wasmExports["dynCall_jjjji"];
-  dynCalls["jijj"] = dynCall_jijj = wasmExports["dynCall_jijj"];
-  dynCalls["vijjjj"] = dynCall_vijjjj = wasmExports["dynCall_vijjjj"];
-  dynCalls["jij"] = dynCall_jij = wasmExports["dynCall_jij"];
-  dynCalls["viijij"] = dynCall_viijij = wasmExports["dynCall_viijij"];
-  dynCalls["viiij"] = dynCall_viiij = wasmExports["dynCall_viiij"];
-  dynCalls["vijj"] = dynCall_vijj = wasmExports["dynCall_vijj"];
-  dynCalls["jjj"] = dynCall_jjj = wasmExports["dynCall_jjj"];
-  dynCalls["viiiiji"] = dynCall_viiiiji = wasmExports["dynCall_viiiiji"];
-  dynCalls["iijiiiji"] = dynCall_iijiiiji = wasmExports["dynCall_iijiiiji"];
-  dynCalls["viiji"] = dynCall_viiji = wasmExports["dynCall_viiji"];
-  dynCalls["vijii"] = dynCall_vijii = wasmExports["dynCall_vijii"];
-  dynCalls["jijjji"] = dynCall_jijjji = wasmExports["dynCall_jijjji"];
-  dynCalls["iijii"] = dynCall_iijii = wasmExports["dynCall_iijii"];
-  dynCalls["jijji"] = dynCall_jijji = wasmExports["dynCall_jijji"];
-  dynCalls["j"] = dynCall_j = wasmExports["dynCall_j"];
-  dynCalls["iiijj"] = dynCall_iiijj = wasmExports["dynCall_iiijj"];
-  dynCalls["iiiiiiiii"] = dynCall_iiiiiiiii = wasmExports["dynCall_iiiiiiiii"];
-  dynCalls["iiijjiii"] = dynCall_iiijjiii = wasmExports["dynCall_iiijjiii"];
-  dynCalls["iijjiii"] = dynCall_iijjiii = wasmExports["dynCall_iijjiii"];
-  dynCalls["iijiiii"] = dynCall_iijiiii = wasmExports["dynCall_iijiiii"];
-  dynCalls["iijjiiii"] = dynCall_iijjiiii = wasmExports["dynCall_iijjiiii"];
-  dynCalls["iiijijjii"] = dynCall_iiijijjii = wasmExports["dynCall_iiijijjii"];
-  dynCalls["iiijiiiii"] = dynCall_iiijiiiii = wasmExports["dynCall_iiijiiiii"];
-  dynCalls["vijjii"] = dynCall_vijjii = wasmExports["dynCall_vijjii"];
-  dynCalls["iiiiiiiiii"] = dynCall_iiiiiiiiii = wasmExports["dynCall_iiiiiiiiii"];
-  dynCalls["iiiiiiiiiiiiiiff"] = dynCall_iiiiiiiiiiiiiiff = wasmExports["dynCall_iiiiiiiiiiiiiiff"];
-  dynCalls["viiiiiiiiiii"] = dynCall_viiiiiiiiiii = wasmExports["dynCall_viiiiiiiiiii"];
-  dynCalls["iiiiiidiiff"] = dynCall_iiiiiidiiff = wasmExports["dynCall_iiiiiidiiff"];
-  dynCalls["vffff"] = dynCall_vffff = wasmExports["dynCall_vffff"];
-  dynCalls["vf"] = dynCall_vf = wasmExports["dynCall_vf"];
-  dynCalls["viiiiiiiii"] = dynCall_viiiiiiiii = wasmExports["dynCall_viiiiiiiii"];
-  dynCalls["vff"] = dynCall_vff = wasmExports["dynCall_vff"];
-  dynCalls["vfi"] = dynCall_vfi = wasmExports["dynCall_vfi"];
-  dynCalls["viif"] = dynCall_viif = wasmExports["dynCall_viif"];
-  dynCalls["vif"] = dynCall_vif = wasmExports["dynCall_vif"];
-  dynCalls["viff"] = dynCall_viff = wasmExports["dynCall_viff"];
-  dynCalls["vifff"] = dynCall_vifff = wasmExports["dynCall_vifff"];
-  dynCalls["viffff"] = dynCall_viffff = wasmExports["dynCall_viffff"];
-  dynCalls["vfff"] = dynCall_vfff = wasmExports["dynCall_vfff"];
-  dynCalls["iidiiii"] = dynCall_iidiiii = wasmExports["dynCall_iidiiii"];
-  _asyncify_start_unwind = wasmExports["asyncify_start_unwind"];
-  _asyncify_stop_unwind = wasmExports["asyncify_stop_unwind"];
-  _asyncify_start_rewind = wasmExports["asyncify_start_rewind"];
-  _asyncify_stop_rewind = wasmExports["asyncify_stop_rewind"];
 }
 
 var wasmImports;
@@ -13284,7 +13070,7 @@ function applySignatureConversions(wasmExports) {
 
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
-function callMain(args = []) {
+async function callMain(args = []) {
   var entryFunction = __emscripten_proxy_main;
   // With PROXY_TO_PTHREAD make sure we keep the runtime alive until the
   // proxied main calls exit (see exitOnMainThread() for where Pop is called).
@@ -13324,7 +13110,7 @@ function run(args = arguments_) {
     dependenciesFulfilled = run;
     return;
   }
-  function doRun() {
+  async function doRun() {
     // run may have just been called through dependencies being fulfilled just in this very frame,
     // or while the async setStatus time below was happening
     Module["calledRun"] = true;
@@ -13334,7 +13120,7 @@ function run(args = arguments_) {
     readyPromiseResolve?.(Module);
     Module["onRuntimeInitialized"]?.();
     var noInitialRun = Module["noInitialRun"] || false;
-    if (!noInitialRun) callMain(args);
+    if (!noInitialRun) await callMain(args);
     postRun();
   }
   if (Module["setStatus"]) {
