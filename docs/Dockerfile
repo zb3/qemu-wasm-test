@@ -7,10 +7,10 @@ ARG GLIB_VERSION=${GLIB_MINOR_VERSION}.0
 ARG PIXMAN_VERSION=0.42.2
 ARG FFI_VERSION=60671187688ae3b295ab0e1dd77a8d6dd7a805a2
 
-FROM emscripten/emsdk:$EMSDK_VERSION_QEMU AS build-base
+FROM custom-emsdk-eh AS build-base
 # Porting glib to emscripten inspired by https://github.com/emscripten-core/emscripten/issues/11066
 ENV TARGET=/build/target
-ENV CFLAGS="-O2 -matomics -mbulk-memory -DNDEBUG -sWASM_BIGINT -DWASM_BIGINT -pthread -sMALLOC=mimalloc -sASYNCIFY=1 "
+ENV CFLAGS="-O2 -matomics -mbulk-memory -DNDEBUG -sWASM_BIGINT -DWASM_BIGINT -pthread -sMALLOC=mimalloc -sASYNCIFY=1 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=0"
 ENV CXXFLAGS="$CFLAGS"
 ENV LDFLAGS="-L$TARGET/lib -O2"
 ENV CPATH="$TARGET/include"
@@ -30,6 +30,19 @@ RUN pip3 install meson==1.5.0
 RUN mkdir /build
 WORKDIR /build
 RUN mkdir -p $TARGET
+
+# Wrap emsdk's node to always pass --experimental-wasm-exnref
+RUN node_path="$(find /emsdk -type f -path '*/node/*/bin/node' | head -n1)" && \
+    node_dir="$(dirname "$node_path")" && \
+    mv "$node_path" "$node_path.real" && \
+    touch "$node_path" && chmod +x "$node_path" && \
+    cat > "$node_path" <<'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/node.real" --experimental-wasm-exnref "$@"
+EOF
+
+RUN sed -i '/user_settings.get(.ASYNCIFY/{N;/ASYNCIFY=1 is not compatible with -fwasm-exceptions/d;}' /emsdk/upstream/emscripten/emcc.py
+
 
 FROM build-base AS zlib-emscripten-dev
 ARG ZLIB_VERSION
@@ -77,7 +90,7 @@ COPY --link --from=zlib-emscripten-dev /build/ /build/
 COPY --link --from=libffi-emscripten-dev /build/ /build/
 
 WORKDIR /glib
-ENV CFLAGS="-Wno-error=incompatible-function-pointer-types -Wincompatible-function-pointer-types -O2 -matomics -mbulk-memory -DNDEBUG -pthread -sSUPPORT_LONGJMP=wasm -sWASM_BIGINT -sMALLOC=mimalloc -sASYNCIFY=1"
+ENV CFLAGS="-Wno-error=incompatible-function-pointer-types -Wincompatible-function-pointer-types -O2 -matomics -mbulk-memory -DNDEBUG -pthread -fwasm-exceptions -sSUPPORT_LONGJMP=wasm -sWASM_BIGINT -sMALLOC=mimalloc -sASYNCIFY=2 -sWASM_LEGACY_EXCEPTIONS=0"
 ENV CXXFLAGS="$CFLAGS"
 RUN <<EOF
 cat <<'EOT' > /emcc-meson-wrap.sh
@@ -129,7 +142,7 @@ RUN git clone  https://gitlab.freedesktop.org/pixman/pixman /pixman/
 WORKDIR /pixman
 RUN git checkout pixman-$PIXMAN_VERSION
 RUN NOCONFIGURE=y ./autogen.sh
-RUN emconfigure ./configure --prefix=/build/target/
+RUN emconfigure ./././configure --prefix=/build/target/
 RUN emmake make -j$(nproc)
 RUN emmake make install
 RUN rm /build/target/lib/libpixman-1.so /build/target/lib/libpixman-1.so.0 /build/target/lib/libpixman-1.so.$PIXMAN_VERSION

@@ -4015,7 +4015,7 @@ endif
 subdir('scripts')
 subdir('tools')
 subdir('pc-bios')
-subdir('docs')
+subdir('qemu_docs')
 subdir('tests')
 if gtk.found()
   subdir('po')

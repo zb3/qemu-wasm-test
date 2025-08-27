@@ -499,6 +499,17 @@ function removeRunDependency(id) {
   // definition for WebAssembly.RuntimeError claims it takes no arguments even
   // though it can.
   // TODO(https://github.com/google/closure-compiler/pull/3913): Remove if/when upstream closure gets fixed.
+  // See above, in the meantime, we resort to wasm code for trapping.
+  // In case abort() is called before the module is initialized, wasmExports
+  // and its exported '__trap' function is not available, in which case we throw
+  // a RuntimeError.
+  // We trap instead of throwing RuntimeError to prevent infinite-looping in
+  // Wasm EH code (because RuntimeError is considered as a foreign exception and
+  // caught by 'catch_all'), but in case throwing RuntimeError is fine because
+  // the module has not even been instantiated, even less running.
+  if (runtimeInitialized) {
+    ___trap();
+  }
   /** @suppress {checkTypes} */ var e = new WebAssembly.RuntimeError(what);
   readyPromiseReject?.(e);
   // Throw the error whether or not MODULARIZE is set because abort is used
@@ -552,7 +563,7 @@ async function instantiateArrayBuffer(binaryFile, imports) {
 }
 
 async function instantiateAsync(binary, binaryFile, imports) {
-  if (!binary && typeof WebAssembly.instantiateStreaming == "function" && !isFileURI(binaryFile) && !ENVIRONMENT_IS_NODE) {
+  if (!binary && !isFileURI(binaryFile) && !ENVIRONMENT_IS_NODE) {
     try {
       var response = fetch(binaryFile, {
         credentials: "same-origin"
@@ -889,7 +900,10 @@ var PThread = {
       } else if (cmd === "spawnThread") {
         spawnThread(d);
       } else if (cmd === "cleanupThread") {
-        cleanupThread(d.thread);
+        // cleanupThread needs to be run via callUserCallback since it calls
+        // back into user code to free thread data. Without this it's possible
+        // the unwind or ExitStatus exception could escape here.
+        callUserCallback(() => cleanupThread(d.thread));
       } else if (cmd === "loaded") {
         worker.loaded = true;
         // Check that this worker doesn't have an associated pthread.
@@ -1180,8 +1194,6 @@ var findStringEnd = (heapOrArray, idx, maxBytesToRead, ignoreNul) => {
     return UTF8Decoder.decode(heapOrArray.buffer instanceof ArrayBuffer ? heapOrArray.subarray(idx, endPtr) : heapOrArray.slice(idx, endPtr));
   }
   var str = "";
-  // If building with TextDecoder, we have already computed the string length
-  // above, so test loop end condition against that
   while (idx < endPtr) {
     // For UTF8 byte structure, see:
     // http://en.wikipedia.org/wiki/UTF-8#Description
@@ -4727,16 +4739,16 @@ var SYSCALLS = {
   },
   writeStatFs(buf, stats) {
     HEAP32[(((buf) + (4)) >>> 2) >>> 0] = stats.bsize;
-    HEAP32[(((buf) + (40)) >>> 2) >>> 0] = stats.bsize;
-    HEAP32[(((buf) + (8)) >>> 2) >>> 0] = stats.blocks;
-    HEAP32[(((buf) + (12)) >>> 2) >>> 0] = stats.bfree;
-    HEAP32[(((buf) + (16)) >>> 2) >>> 0] = stats.bavail;
-    HEAP32[(((buf) + (20)) >>> 2) >>> 0] = stats.files;
-    HEAP32[(((buf) + (24)) >>> 2) >>> 0] = stats.ffree;
-    HEAP32[(((buf) + (28)) >>> 2) >>> 0] = stats.fsid;
-    HEAP32[(((buf) + (44)) >>> 2) >>> 0] = stats.flags;
+    HEAP32[(((buf) + (60)) >>> 2) >>> 0] = stats.bsize;
+    HEAP64[(((buf) + (8)) >>> 3) >>> 0] = BigInt(stats.blocks);
+    HEAP64[(((buf) + (16)) >>> 3) >>> 0] = BigInt(stats.bfree);
+    HEAP64[(((buf) + (24)) >>> 3) >>> 0] = BigInt(stats.bavail);
+    HEAP64[(((buf) + (32)) >>> 3) >>> 0] = BigInt(stats.files);
+    HEAP64[(((buf) + (40)) >>> 3) >>> 0] = BigInt(stats.ffree);
+    HEAP32[(((buf) + (48)) >>> 2) >>> 0] = stats.fsid;
+    HEAP32[(((buf) + (64)) >>> 2) >>> 0] = stats.flags;
     // ST_NOSUID
-    HEAP32[(((buf) + (36)) >>> 2) >>> 0] = stats.namelen;
+    HEAP32[(((buf) + (56)) >>> 2) >>> 0] = stats.namelen;
   },
   doMsync(addr, stream, len, flags, offset) {
     if (!FS.isFile(stream.node.mode)) {
@@ -6060,10 +6072,6 @@ function __emscripten_thread_set_strongref(thread) {
   }
 }
 
-var __emscripten_throw_longjmp = () => {
-  throw Infinity;
-};
-
 function __gmtime_js(time, tmPtr) {
   time = bigintToI53Checked(time);
   tmPtr >>>= 0;
@@ -6284,6 +6292,10 @@ function _clock_time_get(clk_id, ignored_precision, ptime) {
   return 0;
 }
 
+function getFullscreenElement() {
+  return document.fullscreenElement || document.mozFullScreenElement || document.webkitFullscreenElement || document.webkitCurrentFullScreenElement || document.msFullscreenElement;
+}
+
 /** @param {number=} timeout */ var safeSetTimeout = (func, timeout) => {
   runtimeKeepalivePush();
   return setTimeout(() => {
@@ -6492,7 +6504,7 @@ var Browser = {
     function fullscreenChange() {
       Browser.isFullscreen = false;
       var canvasContainer = canvas.parentNode;
-      if ((document["fullscreenElement"] || document["mozFullScreenElement"] || document["msFullscreenElement"] || document["webkitFullscreenElement"] || document["webkitCurrentFullScreenElement"]) === canvasContainer) {
+      if (getFullscreenElement() === canvasContainer) {
         canvas.exitFullscreen = Browser.exitFullscreen;
         if (Browser.lockPointer) canvas.requestPointerLock();
         Browser.isFullscreen = true;
@@ -6730,7 +6742,7 @@ var Browser = {
         h = Math.round(w / Module["forcedAspectRatio"]);
       }
     }
-    if (((document["fullscreenElement"] || document["mozFullScreenElement"] || document["msFullscreenElement"] || document["webkitFullscreenElement"] || document["webkitCurrentFullScreenElement"]) === canvas.parentNode) && (typeof screen != "undefined")) {
+    if ((getFullscreenElement() === canvas.parentNode) && (typeof screen != "undefined")) {
       var factor = Math.min(screen.width / w, screen.height / h);
       w = Math.round(w * factor);
       h = Math.round(h * factor);
@@ -7610,10 +7622,9 @@ var MainLoop = {
   requestAnimationFrame(func) {
     if (typeof requestAnimationFrame == "function") {
       requestAnimationFrame(func);
-      return;
+    } else {
+      MainLoop.fakeRequestAnimationFrame(func);
     }
-    var RAF = MainLoop.fakeRequestAnimationFrame;
-    RAF(func);
   }
 };
 
@@ -8102,8 +8113,7 @@ var registerRestoreOldStyle = canvas => {
   // IE
   var oldImageRendering = canvas.style.imageRendering;
   function restoreOldStyle() {
-    var fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-    if (!fullscreenElement) {
+    if (!getFullscreenElement()) {
       document.removeEventListener("fullscreenchange", restoreOldStyle);
       // Unprefixed Fullscreen API shipped in Chromium 71 (https://bugs.chromium.org/p/chromium/issues/detail?id=383813)
       // As of Safari 13.0.3 on macOS Catalina 10.15.1 still ships with prefixed webkitfullscreenchange. TODO: revisit this check once Safari ships unprefixed version.
@@ -10720,7 +10730,7 @@ function _emscripten_set_focus_callback_on_thread(target, userData, useCapture, 
 }
 
 var fillFullscreenChangeEventData = eventStruct => {
-  var fullscreenElement = document.fullscreenElement || document.mozFullScreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+  var fullscreenElement = getFullscreenElement();
   var isFullscreen = !!fullscreenElement;
   // Assigning a boolean to HEAP32 with expected type coercion.
   /** @suppress{checkTypes} */ HEAP8[eventStruct >>> 0] = isFullscreen;
@@ -11945,7 +11955,7 @@ Module["FS_createLazyFile"] = FS_createLazyFile;
 var proxiedFunctionTable = [ _proc_exit, exitOnMainThread, pthreadCreateProxied, ___syscall_accept4, ___syscall_bind, ___syscall_chdir, ___syscall_chmod, ___syscall_connect, ___syscall_dup3, ___syscall_faccessat, ___syscall_fallocate, ___syscall_fchmod, ___syscall_fchownat, ___syscall_fcntl64, ___syscall_fstat64, ___syscall_fstatfs64, ___syscall_ftruncate64, ___syscall_getcwd, ___syscall_getdents64, ___syscall_getpeername, ___syscall_getsockname, ___syscall_getsockopt, ___syscall_ioctl, ___syscall_listen, ___syscall_lstat64, ___syscall_mkdirat, ___syscall_newfstatat, ___syscall_openat, ___syscall_pipe, ___syscall_poll, ___syscall_readlinkat, ___syscall_recvfrom, ___syscall_recvmsg, ___syscall_renameat, ___syscall_rmdir, ___syscall_sendmsg, ___syscall_sendto, ___syscall_socket, ___syscall_stat64, ___syscall_statfs64, ___syscall_symlinkat, ___syscall_unlinkat, ___syscall_utimensat, __mmap_js, __msync_js, __munmap_js, _eglBindAPI, _eglChooseConfig, _eglCreateContext, _eglCreateWindowSurface, _eglDestroyContext, _eglDestroySurface, _eglGetConfigAttrib, _eglGetDisplay, _eglGetError, _eglInitialize, _eglMakeCurrent, _eglQueryString, _eglSwapBuffers, _eglSwapInterval, _eglTerminate, _eglWaitClient, _eglWaitNative, _emscripten_exit_fullscreen, getCanvasSizeMainThread, setCanvasElementSizeMainThread, _emscripten_exit_pointerlock, _emscripten_force_exit, _emscripten_get_device_pixel_ratio, _emscripten_get_element_css_size, _emscripten_get_gamepad_status, _emscripten_get_num_gamepads, _emscripten_get_screen_size, _emscripten_request_fullscreen_strategy, _emscripten_request_pointerlock, _emscripten_sample_gamepad_data, _emscripten_set_beforeunload_callback_on_thread, _emscripten_set_blur_callback_on_thread, _emscripten_set_element_css_size, _emscripten_set_focus_callback_on_thread, _emscripten_set_fullscreenchange_callback_on_thread, _emscripten_set_gamepadconnected_callback_on_thread, _emscripten_set_gamepaddisconnected_callback_on_thread, _emscripten_set_keydown_callback_on_thread, _emscripten_set_keypress_callback_on_thread, _emscripten_set_keyup_callback_on_thread, _emscripten_set_mousedown_callback_on_thread, _emscripten_set_mouseenter_callback_on_thread, _emscripten_set_mouseleave_callback_on_thread, _emscripten_set_mousemove_callback_on_thread, _emscripten_set_mouseup_callback_on_thread, _emscripten_set_pointerlockchange_callback_on_thread, _emscripten_set_resize_callback_on_thread, _emscripten_set_touchcancel_callback_on_thread, _emscripten_set_touchend_callback_on_thread, _emscripten_set_touchmove_callback_on_thread, _emscripten_set_touchstart_callback_on_thread, _emscripten_set_visibilitychange_callback_on_thread, _emscripten_set_wheel_callback_on_thread, _emscripten_set_window_title, _environ_get, _environ_sizes_get, _fd_close, _fd_fdstat_get, _fd_pread, _fd_pwrite, _fd_read, _fd_seek, _fd_sync, _fd_write, _getaddrinfo ];
 
 var ASM_CONSTS = {
-  8003851: $0 => {
+  8003659: $0 => {
     var str = UTF8ToString($0) + "\n\n" + "Abort/Retry/Ignore/AlwaysIgnore? [ariA] :";
     var reply = window.prompt(str, "i");
     if (reply === null) {
@@ -11953,7 +11963,7 @@ var ASM_CONSTS = {
     }
     return allocate(intArrayFromString(reply), "i8", ALLOC_NORMAL);
   },
-  8004076: () => {
+  8003884: () => {
     if (typeof (AudioContext) !== "undefined") {
       return true;
     } else if (typeof (webkitAudioContext) !== "undefined") {
@@ -11961,7 +11971,7 @@ var ASM_CONSTS = {
     }
     return false;
   },
-  8004223: () => {
+  8004031: () => {
     if ((typeof (navigator.mediaDevices) !== "undefined") && (typeof (navigator.mediaDevices.getUserMedia) !== "undefined")) {
       return true;
     } else if (typeof (navigator.webkitGetUserMedia) !== "undefined") {
@@ -11969,7 +11979,7 @@ var ASM_CONSTS = {
     }
     return false;
   },
-  8004457: $0 => {
+  8004265: $0 => {
     if (typeof (Module["SDL2"]) === "undefined") {
       Module["SDL2"] = {};
     }
@@ -11993,11 +12003,11 @@ var ASM_CONSTS = {
     }
     return SDL2.audioContext === undefined ? -1 : 0;
   },
-  8005009: () => {
+  8004817: () => {
     var SDL2 = Module["SDL2"];
     return SDL2.audioContext.sampleRate;
   },
-  8005077: ($0, $1, $2, $3) => {
+  8004885: ($0, $1, $2, $3) => {
     var SDL2 = Module["SDL2"];
     var have_microphone = function(stream) {
       if (SDL2.capture.silenceTimer !== undefined) {
@@ -12039,7 +12049,7 @@ var ASM_CONSTS = {
       }, have_microphone, no_microphone);
     }
   },
-  8006770: ($0, $1, $2, $3) => {
+  8006578: ($0, $1, $2, $3) => {
     var SDL2 = Module["SDL2"];
     SDL2.audio.scriptProcessorNode = SDL2.audioContext["createScriptProcessor"]($1, 0, $0);
     SDL2.audio.scriptProcessorNode["onaudioprocess"] = function(e) {
@@ -12071,7 +12081,7 @@ var ASM_CONSTS = {
       SDL2.audio.silenceTimer = setInterval(silence_callback, ($1 / SDL2.audioContext.sampleRate) * 1e3);
     }
   },
-  8007945: ($0, $1) => {
+  8007753: ($0, $1) => {
     var SDL2 = Module["SDL2"];
     var numChannels = SDL2.capture.currentCaptureBuffer.numberOfChannels;
     for (var c = 0; c < numChannels; ++c) {
@@ -12090,7 +12100,7 @@ var ASM_CONSTS = {
       }
     }
   },
-  8008550: ($0, $1) => {
+  8008358: ($0, $1) => {
     var SDL2 = Module["SDL2"];
     var buf = $0 >>> 2;
     var numChannels = SDL2.audio.currentOutputBuffer["numberOfChannels"];
@@ -12104,7 +12114,7 @@ var ASM_CONSTS = {
       }
     }
   },
-  8009039: $0 => {
+  8008847: $0 => {
     var SDL2 = Module["SDL2"];
     if ($0) {
       if (SDL2.capture.silenceTimer !== undefined) {
@@ -12138,7 +12148,7 @@ var ASM_CONSTS = {
       SDL2.audioContext = undefined;
     }
   },
-  8010045: ($0, $1, $2) => {
+  8009853: ($0, $1, $2) => {
     var w = $0;
     var h = $1;
     var pixels = $2;
@@ -12209,7 +12219,7 @@ var ASM_CONSTS = {
     }
     SDL2.ctx.putImageData(SDL2.image, 0, 0);
   },
-  8011513: ($0, $1, $2, $3, $4) => {
+  8011321: ($0, $1, $2, $3, $4) => {
     var w = $0;
     var h = $1;
     var hot_x = $2;
@@ -12246,18 +12256,18 @@ var ASM_CONSTS = {
     stringToUTF8(url, urlBuf, url.length + 1);
     return urlBuf;
   },
-  8012501: $0 => {
+  8012309: $0 => {
     if (Module["canvas"]) {
       Module["canvas"].style["cursor"] = UTF8ToString($0);
     }
   },
-  8012584: () => {
+  8012392: () => {
     if (Module["canvas"]) {
       Module["canvas"].style["cursor"] = "none";
     }
   },
-  8012653: () => window.innerWidth,
-  8012683: () => window.innerHeight
+  8012461: () => window.innerWidth,
+  8012491: () => window.innerHeight
 };
 
 function instantiate_wasm() {
@@ -12786,7 +12796,7 @@ function ffi_prep_closure_loc_js(closure, cif, fun, user_data, codeloc) {
 }
 
 // Imports from the Wasm binary.
-var _ntohs, _htonl, _htons, _malloc, _free, _calloc, _main, _pthread_self, _realloc, _emscripten_builtin_free, __emscripten_tls_init, _emscripten_builtin_memalign, __emscripten_proxy_main, __emscripten_run_callback_on_thread, __emscripten_set_offscreencanvas_size_on_thread, _emscripten_builtin_malloc, ___libc_calloc, ___libc_free, ___libc_malloc, __emscripten_thread_init, __emscripten_thread_crashed, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, _strndup, __emscripten_check_mailbox, __ZdaPv, __ZdaPvm, __ZdlPv, __ZdlPvm, __Znaj, __ZnajSt11align_val_t, __Znwj, __ZnwjSt11align_val_t, ___libc_realloc, _emscripten_builtin_calloc, _emscripten_builtin_realloc, _malloc_size, _malloc_usable_size, _reallocf, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, dynCall_v, dynCall_ji, dynCall_viii, dynCall_iiii, dynCall_ii, dynCall_vi, dynCall_vii, dynCall_iji, dynCall_viji, dynCall_vji, dynCall_ijiii, dynCall_iii, dynCall_viiii, dynCall_viiiii, dynCall_iiiii, dynCall_ij, dynCall_iiiiii, dynCall_iiiiiii, dynCall_jii, dynCall_viij, dynCall_iiiiij, dynCall_iiij, dynCall_iiiji, dynCall_jiji, dynCall_vijji, dynCall_viid, dynCall_iijiii, dynCall_iijjii, dynCall_iij, dynCall_viiiiiii, dynCall_ijiiii, dynCall_viijj, dynCall_iiji, dynCall_jiijj, dynCall_vijiii, dynCall_i, dynCall_vjiii, dynCall_viijii, dynCall_viiiijjii, dynCall_iijji, dynCall_iijj, dynCall_jijii, dynCall_iiiiiiii, dynCall_viiiiii, dynCall_viiiiiiii, dynCall_vij, dynCall_jiii, dynCall_iijiiiii, dynCall_vj, dynCall_viiji, dynCall_viiijii, dynCall_viiiijii, dynCall_jjjji, dynCall_jijj, dynCall_vijjjj, dynCall_jij, dynCall_viijij, dynCall_viiij, dynCall_vijj, dynCall_jjj, dynCall_viiiiji, dynCall_iijiiiji, dynCall_vijii, dynCall_jijjji, dynCall_iijii, dynCall_jijji, dynCall_viiiji, dynCall_j, dynCall_iiijj, dynCall_iiiiiiiii, dynCall_iiijjiii, dynCall_iijjiii, dynCall_iijiiii, dynCall_iijjiiii, dynCall_iiijijjii, dynCall_iiijiiiii, dynCall_vijjii, dynCall_iiiiiiiiii, dynCall_iiiiiiiiiiiiiiff, dynCall_viiiiiiiiiii, dynCall_iiiiiidiiff, dynCall_vffff, dynCall_vf, dynCall_viiiiiiiii, dynCall_vff, dynCall_vfi, dynCall_viif, dynCall_vif, dynCall_viff, dynCall_vifff, dynCall_viffff, dynCall_vfff, dynCall_iidiiii, _asyncify_start_unwind, _asyncify_stop_unwind, _asyncify_start_rewind, _asyncify_stop_rewind;
+var _ntohs, _htonl, _htons, _malloc, _free, _calloc, _main, _pthread_self, _realloc, _emscripten_builtin_free, __emscripten_tls_init, _emscripten_builtin_memalign, __emscripten_proxy_main, __emscripten_run_callback_on_thread, __emscripten_set_offscreencanvas_size_on_thread, _emscripten_builtin_malloc, ___libc_calloc, ___libc_free, ___libc_malloc, __emscripten_thread_init, __emscripten_thread_crashed, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, _strndup, __emscripten_check_mailbox, __ZdaPv, __ZdaPvm, __ZdlPv, __ZdlPvm, __Znaj, __ZnajSt11align_val_t, __Znwj, __ZnwjSt11align_val_t, ___libc_realloc, _emscripten_builtin_calloc, _emscripten_builtin_realloc, _malloc_size, _malloc_usable_size, _reallocf, ___trap, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, dynCall_v, dynCall_ji, dynCall_viii, dynCall_iiii, dynCall_ii, dynCall_vi, dynCall_vii, dynCall_iji, dynCall_viji, dynCall_vji, dynCall_ijiii, dynCall_iii, dynCall_viiii, dynCall_viiiii, dynCall_iiiii, dynCall_ij, dynCall_iiiiii, dynCall_iiiiiii, dynCall_jii, dynCall_viij, dynCall_iiiiij, dynCall_iiij, dynCall_iiiji, dynCall_jiji, dynCall_vijji, dynCall_viid, dynCall_iijiii, dynCall_iijjii, dynCall_iij, dynCall_viiiiiii, dynCall_ijiiii, dynCall_viijj, dynCall_iiji, dynCall_jiijj, dynCall_vijiii, dynCall_i, dynCall_vjiii, dynCall_viijii, dynCall_viiiijjii, dynCall_iijji, dynCall_iijj, dynCall_jijii, dynCall_iiiiiiii, dynCall_viiiiii, dynCall_viiiiiiii, dynCall_vij, dynCall_jiii, dynCall_iijiiiii, dynCall_jjjji, dynCall_jijj, dynCall_vijjjj, dynCall_jij, dynCall_viijij, dynCall_viiij, dynCall_vijj, dynCall_jjj, dynCall_viiiiji, dynCall_iijiiiji, dynCall_viiji, dynCall_vijii, dynCall_jijjji, dynCall_iijii, dynCall_jijji, dynCall_j, dynCall_iiijj, dynCall_iiiiiiiii, dynCall_iiijjiii, dynCall_iijjiii, dynCall_iijiiii, dynCall_iijjiiii, dynCall_iiijijjii, dynCall_iiijiiiii, dynCall_vijjii, dynCall_iiiiiiiiii, dynCall_iiiiiiiiiiiiiiff, dynCall_viiiiiiiiiii, dynCall_iiiiiidiiff, dynCall_vffff, dynCall_vf, dynCall_viiiiiiiii, dynCall_vff, dynCall_vfi, dynCall_viif, dynCall_vif, dynCall_viff, dynCall_vifff, dynCall_viffff, dynCall_vfff, dynCall_iidiiii, _asyncify_start_unwind, _asyncify_stop_unwind, _asyncify_start_rewind, _asyncify_stop_rewind;
 
 function assignWasmExports(wasmExports) {
   _ntohs = wasmExports["ntohs"];
@@ -12829,7 +12839,7 @@ function assignWasmExports(wasmExports) {
   Module["_malloc_size"] = _malloc_size = wasmExports["malloc_size"];
   Module["_malloc_usable_size"] = _malloc_usable_size = wasmExports["malloc_usable_size"];
   Module["_reallocf"] = _reallocf = wasmExports["reallocf"];
-  _setThrew = wasmExports["setThrew"];
+  ___trap = wasmExports["__trap"];
   _emscripten_stack_set_limits = wasmExports["emscripten_stack_set_limits"];
   __emscripten_stack_restore = wasmExports["_emscripten_stack_restore"];
   __emscripten_stack_alloc = wasmExports["_emscripten_stack_alloc"];
@@ -12882,10 +12892,6 @@ function assignWasmExports(wasmExports) {
   dynCalls["vij"] = dynCall_vij = wasmExports["dynCall_vij"];
   dynCalls["jiii"] = dynCall_jiii = wasmExports["dynCall_jiii"];
   dynCalls["iijiiiii"] = dynCall_iijiiiii = wasmExports["dynCall_iijiiiii"];
-  dynCalls["vj"] = dynCall_vj = wasmExports["dynCall_vj"];
-  dynCalls["viiji"] = dynCall_viiji = wasmExports["dynCall_viiji"];
-  dynCalls["viiijii"] = dynCall_viiijii = wasmExports["dynCall_viiijii"];
-  dynCalls["viiiijii"] = dynCall_viiiijii = wasmExports["dynCall_viiiijii"];
   dynCalls["jjjji"] = dynCall_jjjji = wasmExports["dynCall_jjjji"];
   dynCalls["jijj"] = dynCall_jijj = wasmExports["dynCall_jijj"];
   dynCalls["vijjjj"] = dynCall_vijjjj = wasmExports["dynCall_vijjjj"];
@@ -12896,11 +12902,11 @@ function assignWasmExports(wasmExports) {
   dynCalls["jjj"] = dynCall_jjj = wasmExports["dynCall_jjj"];
   dynCalls["viiiiji"] = dynCall_viiiiji = wasmExports["dynCall_viiiiji"];
   dynCalls["iijiiiji"] = dynCall_iijiiiji = wasmExports["dynCall_iijiiiji"];
+  dynCalls["viiji"] = dynCall_viiji = wasmExports["dynCall_viiji"];
   dynCalls["vijii"] = dynCall_vijii = wasmExports["dynCall_vijii"];
   dynCalls["jijjji"] = dynCall_jijjji = wasmExports["dynCall_jijjji"];
   dynCalls["iijii"] = dynCall_iijii = wasmExports["dynCall_iijii"];
   dynCalls["jijji"] = dynCall_jijji = wasmExports["dynCall_jijji"];
-  dynCalls["viiiji"] = dynCall_viiiji = wasmExports["dynCall_viiiji"];
   dynCalls["j"] = dynCall_j = wasmExports["dynCall_j"];
   dynCalls["iiijj"] = dynCall_iiijj = wasmExports["dynCall_iiijj"];
   dynCalls["iiiiiiiii"] = dynCall_iiiiiiiii = wasmExports["dynCall_iiiiiiiii"];
@@ -12989,7 +12995,6 @@ function assignWasmImports() {
     /** @export */ _emscripten_thread_cleanup: __emscripten_thread_cleanup,
     /** @export */ _emscripten_thread_mailbox_await: __emscripten_thread_mailbox_await,
     /** @export */ _emscripten_thread_set_strongref: __emscripten_thread_set_strongref,
-    /** @export */ _emscripten_throw_longjmp: __emscripten_throw_longjmp,
     /** @export */ _gmtime_js: __gmtime_js,
     /** @export */ _localtime_js: __localtime_js,
     /** @export */ _mktime_js: __mktime_js,
@@ -13247,34 +13252,6 @@ function assignWasmImports() {
     /** @export */ getnameinfo: _getnameinfo,
     /** @export */ init_wasm32_js,
     /** @export */ instantiate_wasm,
-    /** @export */ invoke_i,
-    /** @export */ invoke_ii,
-    /** @export */ invoke_iii,
-    /** @export */ invoke_iiii,
-    /** @export */ invoke_iiiiii,
-    /** @export */ invoke_iiij,
-    /** @export */ invoke_iij,
-    /** @export */ invoke_iijjii,
-    /** @export */ invoke_ij,
-    /** @export */ invoke_ji,
-    /** @export */ invoke_jii,
-    /** @export */ invoke_jiii,
-    /** @export */ invoke_v,
-    /** @export */ invoke_vi,
-    /** @export */ invoke_vii,
-    /** @export */ invoke_viii,
-    /** @export */ invoke_viiii,
-    /** @export */ invoke_viiiii,
-    /** @export */ invoke_viiiiii,
-    /** @export */ invoke_viiiiiii,
-    /** @export */ invoke_viiiijii,
-    /** @export */ invoke_viiiji,
-    /** @export */ invoke_viiijii,
-    /** @export */ invoke_viij,
-    /** @export */ invoke_viiji,
-    /** @export */ invoke_viijii,
-    /** @export */ invoke_vij,
-    /** @export */ invoke_vj,
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
     /** @export */ random_get: _random_get,
@@ -13283,317 +13260,6 @@ function assignWasmImports() {
 }
 
 var wasmExports = await createWasm();
-
-function invoke_ji(index, a1) {
-  var sp = stackSave();
-  try {
-    return dynCall_ji(index, a1);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-    return 0n;
-  }
-}
-
-function invoke_vii(index, a1, a2) {
-  var sp = stackSave();
-  try {
-    dynCall_vii(index, a1, a2);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_vi(index, a1) {
-  var sp = stackSave();
-  try {
-    dynCall_vi(index, a1);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iij(index, a1, a2) {
-  var sp = stackSave();
-  try {
-    return dynCall_iij(index, a1, a2);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiij(index, a1, a2, a3) {
-  var sp = stackSave();
-  try {
-    return dynCall_iiij(index, a1, a2, a3);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iii(index, a1, a2) {
-  var sp = stackSave();
-  try {
-    return dynCall_iii(index, a1, a2);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viii(index, a1, a2, a3) {
-  var sp = stackSave();
-  try {
-    dynCall_viii(index, a1, a2, a3);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiii(index, a1, a2, a3) {
-  var sp = stackSave();
-  try {
-    return dynCall_iiii(index, a1, a2, a3);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiii(index, a1, a2, a3, a4) {
-  var sp = stackSave();
-  try {
-    dynCall_viiii(index, a1, a2, a3, a4);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_ii(index, a1) {
-  var sp = stackSave();
-  try {
-    return dynCall_ii(index, a1);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viij(index, a1, a2, a3) {
-  var sp = stackSave();
-  try {
-    dynCall_viij(index, a1, a2, a3);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_jiii(index, a1, a2, a3) {
-  var sp = stackSave();
-  try {
-    return dynCall_jiii(index, a1, a2, a3);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-    return 0n;
-  }
-}
-
-function invoke_jii(index, a1, a2) {
-  var sp = stackSave();
-  try {
-    return dynCall_jii(index, a1, a2);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-    return 0n;
-  }
-}
-
-function invoke_vj(index, a1) {
-  var sp = stackSave();
-  try {
-    dynCall_vj(index, a1);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viijii(index, a1, a2, a3, a4, a5) {
-  var sp = stackSave();
-  try {
-    dynCall_viijii(index, a1, a2, a3, a4, a5);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiiiii(index, a1, a2, a3, a4, a5, a6) {
-  var sp = stackSave();
-  try {
-    dynCall_viiiiii(index, a1, a2, a3, a4, a5, a6);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiiii(index, a1, a2, a3, a4, a5) {
-  var sp = stackSave();
-  try {
-    dynCall_viiiii(index, a1, a2, a3, a4, a5);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iiiiii(index, a1, a2, a3, a4, a5) {
-  var sp = stackSave();
-  try {
-    return dynCall_iiiiii(index, a1, a2, a3, a4, a5);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_i(index) {
-  var sp = stackSave();
-  try {
-    return dynCall_i(index);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_vij(index, a1, a2) {
-  var sp = stackSave();
-  try {
-    dynCall_vij(index, a1, a2);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiji(index, a1, a2, a3, a4) {
-  var sp = stackSave();
-  try {
-    dynCall_viiji(index, a1, a2, a3, a4);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiiiiii(index, a1, a2, a3, a4, a5, a6, a7) {
-  var sp = stackSave();
-  try {
-    dynCall_viiiiiii(index, a1, a2, a3, a4, a5, a6, a7);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiijii(index, a1, a2, a3, a4, a5, a6) {
-  var sp = stackSave();
-  try {
-    dynCall_viiijii(index, a1, a2, a3, a4, a5, a6);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_ij(index, a1) {
-  var sp = stackSave();
-  try {
-    return dynCall_ij(index, a1);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiiijii(index, a1, a2, a3, a4, a5, a6, a7) {
-  var sp = stackSave();
-  try {
-    dynCall_viiiijii(index, a1, a2, a3, a4, a5, a6, a7);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_v(index) {
-  var sp = stackSave();
-  try {
-    dynCall_v(index);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_iijjii(index, a1, a2, a3, a4, a5) {
-  var sp = stackSave();
-  try {
-    return dynCall_iijjii(index, a1, a2, a3, a4, a5);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_viiiji(index, a1, a2, a3, a4, a5) {
-  var sp = stackSave();
-  try {
-    dynCall_viiiji(index, a1, a2, a3, a4, a5);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
 
 // Argument name here must shadow the `wasmExports` global so
 // that it is recognised by metadce and minify-import-export-names

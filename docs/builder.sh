@@ -1,5 +1,7 @@
 #!/bin/bash
 
-docker build -t buildqemu2 - < Dockerfile
-mkdir -p ../build
-docker run --rm -i -v $(pwd)/../:/qemu/ -v $(pwd)/../build:/hostbuild/ buildqemu2 /bin/bash -c 'chown -R 1000:1000 *; cp -r * /hostbuild/;'
+docker build  -t custom-emsdk-eh . -f Dockerfile.emsdk
+
+docker build -t buildqemueh - < Dockerfile
+mkdir -p ../buildeh
+docker run --rm -i -v $(pwd)/../:/qemu/ -v $(pwd)/../buildeh:/hostbuild/ buildqemueh /bin/bash -c 'chown -R 1000:1000 *; cp -r * /hostbuild/;'
