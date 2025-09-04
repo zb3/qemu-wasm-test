@@ -211,6 +211,7 @@ static const int tcg_target_reg_alloc_order[TCG_TARGET_NB_REGS] = {
     TCG_REG_R15,
 };
 
+// this appears to be outdated... indeed we'd not need to put anything in the regs
 #define NUM_OF_IARG_REGS 5
 static const int tcg_target_call_iarg_regs[NUM_OF_IARG_REGS] = {
    TCG_REG_R8,
@@ -1837,7 +1838,7 @@ static void tcg_wasm_out_goto_tb(TCGContext *s, int which)
     tcg_wasm_out_op_i32_load(s, 0, 0);
     tcg_wasm_out_op_local_set(s, TMP32_LOCAL_0_IDX);
 
-    tcg_wasm_out_op_local_get(s, TMP32_LOCAL_0_IDX);
+    tcg_wasm_out_op_local_get(s, TMP32_LOCAL_0_IDX); // tee?
     tcg_wasm_out_op_i32_const(s, 0);
     tcg_wasm_out_op_i32_ne(s);
     tcg_wasm_out_op_if_noret(s);
@@ -1855,7 +1856,6 @@ static void tcg_wasm_out_goto_tb(TCGContext *s, int which)
     tcg_wasm_out_op_local_get(s, CTX_IDX);
     tcg_wasm_out_op_local_get(s, TMP32_LOCAL_0_IDX);
     tcg_wasm_out_op_i32_store(s, 0, TB_PTR_OFF);
-    tcg_wasm_out_ctx_i32_store_const(s, DO_INIT_OFF, 1);
 
     tcg_wasm_out_op_i32_const(s, 0);
     tcg_wasm_out_op_return(s);
@@ -2940,7 +2940,7 @@ static void tcg_tci_out_extrl_i64_i32(TCGContext *s, TCGReg rd, TCGReg rs)
 static void tcg_tci_out_call(TCGContext *s, const tcg_insn_unit *func,
                          const TCGHelperInfo *info)
 {
-    ffi_cif *cif = info->cif;
+  /*  ffi_cif *cif = info->cif;
     uint32_t insn = 0;
     uint8_t which;
 
@@ -2953,8 +2953,12 @@ static void tcg_tci_out_call(TCGContext *s, const tcg_insn_unit *func,
         which = ctz32(cif->rtype->size) - 1;
     }
     new_pool_l2(s, 20, (void*)cur_tci_ptr(s), 0, (uintptr_t)func, (uintptr_t)cif);
+    */
+    new_pool_l2(s, 20, (void*)cur_tci_ptr(s), 0, (uintptr_t)func, (uintptr_t)info->callhelper);
+
+    uint32_t insn = 0;
     insn = deposit32(insn, 0, 8, INDEX_op_call);
-    insn = deposit32(insn, 8, 4, which);
+    insn = deposit32(insn, 8, 4, 0);//which);
     tcg_tci_out32(s, insn);
 }
 

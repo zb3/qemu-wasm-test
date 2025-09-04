@@ -155,5 +155,8 @@ FROM build-base
 COPY --link --from=zlib-emscripten-dev /build/ /build/
 COPY --link --from=build-dev /build/ /build/
 COPY --link --from=pixman-emscripten-dev /build/ /build/
+
+RUN /emsdk/upstream/emscripten/embuilder build sdl2
+
 WORKDIR /build/
 CMD sleep infinity

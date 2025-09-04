@@ -1,21 +1,20 @@
---- qemu-system-x86_64.js	2025-08-24 03:56:20.466066243 +0200
-+++ "qemu-system-x86_64 copy.js"	2025-08-24 03:57:13.079099575 +0200
-@@ -1,6 +1,6 @@
+--- qemu-system-x86_64.js 2025-09-04 22:29:54.371974611 +0200
++++ qemu-system-x86_64.js	2025-09-04 22:32:29.154423162 +0200
+@@ -1,6 +1,5 @@
  // This code implements the `-sMODULARIZE` settings by taking the generated
  // JS program code (INNER_JS_CODE) and wrapping it in a factory function.
 -
-+Error.stackTraceLimit = 400;
  // When targetting node and ES6 we use `await import ..` in the generated code
  // so the outer function needs to be marked as async.
  async function Module(moduleArg = {}) {
-@@ -1066,15 +1066,20 @@
+@@ -1066,15 +1065,20 @@
  }
- 
+
  var wasmTableMirror = [];
 +var wasmTableIsAsync = [];
- 
+
  /** @type {WebAssembly.Table} */ var wasmTable;
- 
+
 -var getWasmTableEntry = funcPtr => {
 +var getWasmTableEntry = (funcPtr, forceAsync=false) => {
    var func = wasmTableMirror[funcPtr];
@@ -31,7 +30,7 @@
      }
    }
    return func;
-@@ -1101,7 +1106,7 @@
+@@ -1101,7 +1105,7 @@
    // *ThreadMain(void *arg) form, or try linking with the Emscripten linker
    // flag -sEMULATE_FUNCTION_POINTER_CASTS to add in emulation for this x86
    // ABI extension.
@@ -40,16 +39,22 @@
    function finish(result) {
      if (keepRuntimeAlive()) {
        EXITSTATUS = result;
-@@ -3820,7 +3825,7 @@
-     SOCKFS.callbacks[event]?.(param);
-   },
-   mount(mount) {
--    // The incomming Module['websocket'] can be used for configuring 
-+    // The incomming Module['websocket'] can be used for configuring
-     // configuring subprotocol/url, etc
-     SOCKFS.websocketArgs = Module["websocket"] || {};
-     // Add the Event registration mechanism to the exported websocket configuration
-@@ -8388,7 +8393,7 @@
+@@ -8331,8 +8335,7 @@
+           Asyncify.asyncExports.add(original);
+           original = Asyncify.makeAsyncFunction(original);
+         }
+-        var wrapper = Asyncify.instrumentFunction(original);
+-        ret[x] = wrapper;
++        ret[x] = original;
+       } else {
+         ret[x] = original;
+       }
+@@ -8383,12 +8386,10 @@
+       Fibers.resolvers[promiseId]();
+     } else {
+       var entryPoint = HEAPU32[(((newFiber) + (12)) >>> 2) >>> 0];
+-      // when it suspends we'll write promiseid, so not sure if this is also needed
+-      HEAPU32[(((newFiber) + (12)) >>> 2) >>> 0] = 0;
        var userData = HEAPU32[(((newFiber) + (16)) >>> 2) >>> 0];
        // KOKO: this calls .promising() each time
        // while only once per coroutine, this doesn't use cache;
@@ -58,8 +63,8 @@
      }
    }
  };
-@@ -11658,9 +11663,9 @@
- 
+@@ -11658,9 +11659,9 @@
+
  var dynCall = (sig, ptr, args = [], promising = false) => {
    var func = getWasmTableEntry(ptr);
 -  if (promising) {
@@ -71,16 +76,16 @@
    var rtn = func(...args);
    function convert(rtn) {
      return sig[0] == "p" ? rtn >>> 0 : rtn;
-@@ -12219,7 +12224,7 @@
+@@ -12219,7 +12220,7 @@
    return [ type_ptr, type_id ];
  }
- 
+
 -function ffi_call_js(cif, fn, rvalue, avalue) {
 +async function ffi_call_js(cif, fn, rvalue, avalue) {
    var abi = HEAPU32[(cif >> 2) + 0 >>> 0];
    var nargs = HEAPU32[(cif >> 2) + 1 >>> 0];
    var nfixedargs = HEAPU32[(cif >> 2) + 6 >>> 0];
-@@ -12375,7 +12380,7 @@
+@@ -12375,7 +12376,7 @@
    stackRestore(cur_stack_ptr);
    stackAlloc(0);
    0;

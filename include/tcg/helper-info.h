@@ -40,6 +40,8 @@ typedef struct TCGCallArgumentLoc {
     unsigned tmp_subindex       : 2;
 } TCGCallArgumentLoc;
 
+typedef void (*callhelper_t)(tcg_target_ulong *, uint64_t *);
+
 struct TCGHelperInfo {
     void *func;
     const char *name;
@@ -62,6 +64,8 @@ struct TCGHelperInfo {
 
     /* Maximum physical arguments are constrained by TCG_TYPE_I128. */
     TCGCallArgumentLoc in[MAX_CALL_IARGS * (128 / TCG_TARGET_REG_BITS)];
+
+    callhelper_t callhelper;
 };
 
 #endif /* TCG_HELPER_INFO_H */

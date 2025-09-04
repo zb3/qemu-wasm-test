@@ -1,6 +1,5 @@
 // This code implements the `-sMODULARIZE` settings by taking the generated
 // JS program code (INNER_JS_CODE) and wrapping it in a factory function.
-Error.stackTraceLimit = 400;
 // When targetting node and ES6 we use `await import ..` in the generated code
 // so the outer function needs to be marked as async.
 async function Module(moduleArg = {}) {
@@ -3825,7 +3824,7 @@ var SOCKFS = {
     SOCKFS.callbacks[event]?.(param);
   },
   mount(mount) {
-    // The incomming Module['websocket'] can be used for configuring
+    // The incomming Module['websocket'] can be used for configuring 
     // configuring subprotocol/url, etc
     SOCKFS.websocketArgs = Module["websocket"] || {};
     // Add the Event registration mechanism to the exported websocket configuration
@@ -8336,8 +8335,7 @@ var Asyncify = {
           Asyncify.asyncExports.add(original);
           original = Asyncify.makeAsyncFunction(original);
         }
-        var wrapper = Asyncify.instrumentFunction(original);
-        ret[x] = wrapper;
+        ret[x] = original;
       } else {
         ret[x] = original;
       }
@@ -8388,8 +8386,6 @@ var Fibers = {
       Fibers.resolvers[promiseId]();
     } else {
       var entryPoint = HEAPU32[(((newFiber) + (12)) >>> 2) >>> 0];
-      // when it suspends we'll write promiseid, so not sure if this is also needed
-      HEAPU32[(((newFiber) + (12)) >>> 2) >>> 0] = 0;
       var userData = HEAPU32[(((newFiber) + (16)) >>> 2) >>> 0];
       // KOKO: this calls .promising() each time
       // while only once per coroutine, this doesn't use cache;
@@ -11826,7 +11822,7 @@ Module["FS_createLazyFile"] = FS_createLazyFile;
 var proxiedFunctionTable = [ _proc_exit, exitOnMainThread, pthreadCreateProxied, ___syscall_accept4, ___syscall_bind, ___syscall_chdir, ___syscall_chmod, ___syscall_connect, ___syscall_dup3, ___syscall_faccessat, ___syscall_fallocate, ___syscall_fchmod, ___syscall_fchownat, ___syscall_fcntl64, ___syscall_fstat64, ___syscall_fstatfs64, ___syscall_ftruncate64, ___syscall_getcwd, ___syscall_getdents64, ___syscall_getpeername, ___syscall_getsockname, ___syscall_getsockopt, ___syscall_ioctl, ___syscall_listen, ___syscall_lstat64, ___syscall_mkdirat, ___syscall_newfstatat, ___syscall_openat, ___syscall_pipe, ___syscall_poll, ___syscall_readlinkat, ___syscall_recvfrom, ___syscall_recvmsg, ___syscall_renameat, ___syscall_rmdir, ___syscall_sendmsg, ___syscall_sendto, ___syscall_socket, ___syscall_stat64, ___syscall_statfs64, ___syscall_symlinkat, ___syscall_unlinkat, ___syscall_utimensat, __mmap_js, __msync_js, __munmap_js, _eglBindAPI, _eglChooseConfig, _eglCreateContext, _eglCreateWindowSurface, _eglDestroyContext, _eglDestroySurface, _eglGetConfigAttrib, _eglGetDisplay, _eglGetError, _eglInitialize, _eglMakeCurrent, _eglQueryString, _eglSwapBuffers, _eglSwapInterval, _eglTerminate, _eglWaitClient, _eglWaitNative, _emscripten_exit_fullscreen, getCanvasSizeMainThread, setCanvasElementSizeMainThread, _emscripten_exit_pointerlock, _emscripten_force_exit, _emscripten_get_device_pixel_ratio, _emscripten_get_element_css_size, _emscripten_get_gamepad_status, _emscripten_get_num_gamepads, _emscripten_get_screen_size, _emscripten_request_fullscreen_strategy, _emscripten_request_pointerlock, _emscripten_sample_gamepad_data, _emscripten_set_beforeunload_callback_on_thread, _emscripten_set_blur_callback_on_thread, _emscripten_set_element_css_size, _emscripten_set_focus_callback_on_thread, _emscripten_set_fullscreenchange_callback_on_thread, _emscripten_set_gamepadconnected_callback_on_thread, _emscripten_set_gamepaddisconnected_callback_on_thread, _emscripten_set_keydown_callback_on_thread, _emscripten_set_keypress_callback_on_thread, _emscripten_set_keyup_callback_on_thread, _emscripten_set_mousedown_callback_on_thread, _emscripten_set_mouseenter_callback_on_thread, _emscripten_set_mouseleave_callback_on_thread, _emscripten_set_mousemove_callback_on_thread, _emscripten_set_mouseup_callback_on_thread, _emscripten_set_pointerlockchange_callback_on_thread, _emscripten_set_resize_callback_on_thread, _emscripten_set_touchcancel_callback_on_thread, _emscripten_set_touchend_callback_on_thread, _emscripten_set_touchmove_callback_on_thread, _emscripten_set_touchstart_callback_on_thread, _emscripten_set_visibilitychange_callback_on_thread, _emscripten_set_wheel_callback_on_thread, _emscripten_set_window_title, _environ_get, _environ_sizes_get, _fd_close, _fd_fdstat_get, _fd_pread, _fd_pwrite, _fd_read, _fd_seek, _fd_sync, _fd_write, _getaddrinfo ];
 
 var ASM_CONSTS = {
-  8003659: $0 => {
+  7967547: $0 => {
     var str = UTF8ToString($0) + "\n\n" + "Abort/Retry/Ignore/AlwaysIgnore? [ariA] :";
     var reply = window.prompt(str, "i");
     if (reply === null) {
@@ -11834,7 +11830,7 @@ var ASM_CONSTS = {
     }
     return allocate(intArrayFromString(reply), "i8", ALLOC_NORMAL);
   },
-  8003884: () => {
+  7967772: () => {
     if (typeof (AudioContext) !== "undefined") {
       return true;
     } else if (typeof (webkitAudioContext) !== "undefined") {
@@ -11842,7 +11838,7 @@ var ASM_CONSTS = {
     }
     return false;
   },
-  8004031: () => {
+  7967919: () => {
     if ((typeof (navigator.mediaDevices) !== "undefined") && (typeof (navigator.mediaDevices.getUserMedia) !== "undefined")) {
       return true;
     } else if (typeof (navigator.webkitGetUserMedia) !== "undefined") {
@@ -11850,7 +11846,7 @@ var ASM_CONSTS = {
     }
     return false;
   },
-  8004265: $0 => {
+  7968153: $0 => {
     if (typeof (Module["SDL2"]) === "undefined") {
       Module["SDL2"] = {};
     }
@@ -11874,11 +11870,11 @@ var ASM_CONSTS = {
     }
     return SDL2.audioContext === undefined ? -1 : 0;
   },
-  8004817: () => {
+  7968705: () => {
     var SDL2 = Module["SDL2"];
     return SDL2.audioContext.sampleRate;
   },
-  8004885: ($0, $1, $2, $3) => {
+  7968773: ($0, $1, $2, $3) => {
     var SDL2 = Module["SDL2"];
     var have_microphone = function(stream) {
       if (SDL2.capture.silenceTimer !== undefined) {
@@ -11920,7 +11916,7 @@ var ASM_CONSTS = {
       }, have_microphone, no_microphone);
     }
   },
-  8006578: ($0, $1, $2, $3) => {
+  7970466: ($0, $1, $2, $3) => {
     var SDL2 = Module["SDL2"];
     SDL2.audio.scriptProcessorNode = SDL2.audioContext["createScriptProcessor"]($1, 0, $0);
     SDL2.audio.scriptProcessorNode["onaudioprocess"] = function(e) {
@@ -11952,7 +11948,7 @@ var ASM_CONSTS = {
       SDL2.audio.silenceTimer = setInterval(silence_callback, ($1 / SDL2.audioContext.sampleRate) * 1e3);
     }
   },
-  8007753: ($0, $1) => {
+  7971641: ($0, $1) => {
     var SDL2 = Module["SDL2"];
     var numChannels = SDL2.capture.currentCaptureBuffer.numberOfChannels;
     for (var c = 0; c < numChannels; ++c) {
@@ -11971,7 +11967,7 @@ var ASM_CONSTS = {
       }
     }
   },
-  8008358: ($0, $1) => {
+  7972246: ($0, $1) => {
     var SDL2 = Module["SDL2"];
     var buf = $0 >>> 2;
     var numChannels = SDL2.audio.currentOutputBuffer["numberOfChannels"];
@@ -11985,7 +11981,7 @@ var ASM_CONSTS = {
       }
     }
   },
-  8008847: $0 => {
+  7972735: $0 => {
     var SDL2 = Module["SDL2"];
     if ($0) {
       if (SDL2.capture.silenceTimer !== undefined) {
@@ -12019,7 +12015,7 @@ var ASM_CONSTS = {
       SDL2.audioContext = undefined;
     }
   },
-  8009853: ($0, $1, $2) => {
+  7973741: ($0, $1, $2) => {
     var w = $0;
     var h = $1;
     var pixels = $2;
@@ -12090,7 +12086,7 @@ var ASM_CONSTS = {
     }
     SDL2.ctx.putImageData(SDL2.image, 0, 0);
   },
-  8011321: ($0, $1, $2, $3, $4) => {
+  7975209: ($0, $1, $2, $3, $4) => {
     var w = $0;
     var h = $1;
     var hot_x = $2;
@@ -12127,18 +12123,18 @@ var ASM_CONSTS = {
     stringToUTF8(url, urlBuf, url.length + 1);
     return urlBuf;
   },
-  8012309: $0 => {
+  7976197: $0 => {
     if (Module["canvas"]) {
       Module["canvas"].style["cursor"] = UTF8ToString($0);
     }
   },
-  8012392: () => {
+  7976280: () => {
     if (Module["canvas"]) {
       Module["canvas"].style["cursor"] = "none";
     }
   },
-  8012461: () => window.innerWidth,
-  8012491: () => window.innerHeight
+  7976349: () => window.innerWidth,
+  7976379: () => window.innerHeight
 };
 
 function instantiate_wasm() {
@@ -12426,8 +12422,6 @@ async function ffi_call_js(cif, fn, rvalue, avalue) {
     throw new Error("Unexpected rtype " + rtype_id);
   }
 }
-
-ffi_call_js.sig = "viiii";
 
 function ffi_closure_alloc_js(size, code) {
   var closure = _malloc(size);
@@ -13033,7 +13027,6 @@ function assignWasmImports() {
     /** @export */ fd_seek: _fd_seek,
     /** @export */ fd_sync: _fd_sync,
     /** @export */ fd_write: _fd_write,
-    /** @export */ ffi_call_js,
     /** @export */ getaddrinfo: _getaddrinfo,
     /** @export */ getnameinfo: _getnameinfo,
     /** @export */ init_wasm32_js,

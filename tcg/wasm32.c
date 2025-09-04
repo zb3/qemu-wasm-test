@@ -47,7 +47,7 @@ EM_JS(int, instantiate_wasm, (), {
 
         const counter_vec_size = memory_v.getInt32(export_vec_begin + export_vec_size, true);
         const counter_vec_begin = export_vec_begin + export_vec_size + 4;
-        
+
         const tmp_body_size = memory_v.getInt32(counter_vec_begin + counter_vec_size, true);
         const tmp_body_begin = counter_vec_begin + counter_vec_size + 4;
         const wasm_size = memory_v.getInt32(tmp_body_begin + tmp_body_size, true);
@@ -58,7 +58,7 @@ EM_JS(int, instantiate_wasm, (), {
         // Create a full copy of the bytes instead of a subarray view to fix Firefox compatibility
         // See: https://bugzilla.mozilla.org/show_bug.cgi?id=1965217
         const wasmBytes = new Uint8Array(HEAP8.slice(wasm_begin, wasm_begin + wasm_size));
-        
+
         var helper = {};
         for (var i = 0; i < import_vec_size / 4; i++) {
             helper[i] = wasmTable.get(memory_v.getInt32(import_vec_begin + i * 4, true));
@@ -618,7 +618,7 @@ static void tci_qemu_st(CPUArchState *env, uint64_t taddr, uint64_t val,
         }
         return;
     }
-    
+
     switch (mop & MO_SIZE) {
     case MO_UB:
         helper_stb_mmu(env, taddr, val, oi, ra);
@@ -658,7 +658,7 @@ static inline uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
 
     regs[TCG_AREG0] = (tcg_target_ulong)env;
     regs[TCG_REG_CALL_STACK] = (uintptr_t)stack;
-    
+
     for (;;) {
         uint32_t insn;
         TCGOpcode opc;
@@ -682,6 +682,23 @@ static inline uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
         switch (opc) {
         case INDEX_op_call:
             {
+                tci_args_nl(insn, tb_ptr, &len, &ptr);
+                uint64_t *data64 = (uint64_t*)ptr;
+                void *func = (void*)data64[0];
+                callhelper_t callhelper = (void*)data64[1];
+
+                int reg_iarg_base = 8;
+                if ((uint32_t)func == (uint32_t)helper_lookup_tb_ptr) {
+                    regs[TCG_REG_R0] = (uint32_t)helper_lookup_tb_ptr((CPUArchState *)regs[reg_iarg_base]);
+                    break;
+                }
+
+                tci_tb_ptr = (uintptr_t)tb_ptr;
+                callhelper(regs, stack);
+            }
+            /*
+            {
+                // note this isn't
                 void *call_slots[MAX_CALL_IARGS];
                 ffi_cif *cif;
                 void *func;
@@ -697,7 +714,9 @@ static inline uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
                     regs[TCG_REG_R0] = (uint32_t)helper_lookup_tb_ptr((CPUArchState *)regs[reg_iarg_base]);
                     break;
                 }
-                
+
+                // this is about reading the arguments into a ffi structure
+
                 int reg_idx = 0;
                 int reg_idx_end = 5; // NUM_OF_IARG_REGS
                 int stack_idx = 0;
@@ -713,20 +732,20 @@ static inline uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
                     }
                 }
 
-                /* Helper functions may need to access the "return address" */
+                /* Helper functions may need to access the "return address" * /
                 tci_tb_ptr = (uintptr_t)tb_ptr;
                 ffi_call(cif, func, stack, call_slots);
             }
 
             switch (len) {
-            case 0: /* void */
+            case 0: /* void * /
                 break;
-            case 1: /* uint32_t */
+            case 1: /* uint32_t * /
                 /*
                  * The result winds up "left-aligned" in the stack[0] slot.
                  * Note that libffi has an odd special case in that it will
                  * always widen an integral result to ffi_arg.
-                 */
+                 * /
                 if (sizeof(ffi_arg) == 8) {
                     regs[TCG_REG_R0] = (uint32_t)stack[0];
                 } else {
@@ -737,15 +756,16 @@ static inline uintptr_t tcg_qemu_tb_exec_tci(CPUArchState *env)
                 /*
                  * For TCG_TARGET_REG_BITS == 32, the register pair
                  * must stay in host memory order.
-                 */
+                 * /
                 memcpy(&regs[TCG_REG_R0], stack, 8);
                 break;
-            case 3: /* Int128 */
+            case 3: /* Int128 * /
                 memcpy(&regs[TCG_REG_R0], stack, 16);
                 break;
             default:
                 g_assert_not_reached();
             }
+            */
             break;
 
         case INDEX_op_br:
@@ -1322,7 +1342,6 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env,
 {
     ctx.env = env;
     ctx.tb_ptr = (uint32_t*)v_tb_ptr;
-    ctx.do_init = 1;
     while (true) {
         trysleep();
         int tb_counter_ptr = (uint32_t)ctx.tb_ptr + counter_vec_off;
@@ -1349,3 +1368,5 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env,
 }
 
 #endif
+
+#include "docs/add.inc"
